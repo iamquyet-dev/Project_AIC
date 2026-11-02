@@ -1,0 +1,4 @@
+Model,Feature_Type,Accuracy,Precision_Weighted,Recall_Weighted,Weighted_F1,Macro_Precision,Macro_Recall,Macro_F1,File_Size,Fit_Time
+1. Linear SVM,Word + char n-grams (3-5 ký tự),92.13%,93.16%,92.13%,92.26%,42.45%,34.46%,36.19%,3.98 MB,6339.35s
+2. Logistic Regression,Word TF-IDF,87.53%,87.58%,87.52%,87.32%,35.85%,31.45%,32.32%,2.34 MB,1491.45s
+3. Logistic Regression,11 đặc trưng cấu trúc (Lexical),77.08%,85.82%,77.08%,80.65%,31.47%,28.71%,29.73%,1.9 KB,3455.61s

@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIC211 - Phân Loại URL Độc Hại Đa Lớp</title>
+  <link rel="stylesheet" href="/styles.css?v=20261031_3">
+</head>
+<body>
+  <!-- Thanh dieu huong chinh -->
+  <header class="navbar">
+    <div class="nav-brand">
+      <span class="brand-title">AIC211</span>
+      <span class="brand-sub">Phân Loại Nguy Cơ URL Đa Lớp</span>
+    </div>
+
+    <!-- Chon mo hinh dang chay -->
+    <div class="nav-model-bar">
+      <label for="header-model-select" class="model-label">Mô hình:</label>
+      <select id="header-model-select" class="model-dropdown">
+        <option value="model_word_char_svm">Word + char n-grams · Linear SVM (3.98 MB)</option>
+        <option value="model_word_tfidf_logistic">Word TF-IDF · Logistic Regression (2.34 MB)</option>
+        <option value="model_lexical_logistic">Lexical features · Logistic Regression (1.9 KB)</option>
+      </select>
+      <span id="model-status-indicator" class="status-indicator online">Sẵn sàng</span>
+    </div>
+
+    <!-- Cac the tab chuc nang -->
+    <nav class="nav-tabs">
+      <button class="tab-btn active" data-tab="tab-scanner">Phân Loại URL</button>
+      <button class="tab-btn" data-tab="tab-models">Quản Lý Mô Hình</button>
+      <button class="tab-btn" data-tab="tab-dataset">Tập Dữ Liệu</button>
+      <button class="tab-btn" data-tab="tab-metrics">Báo Cáo Đánh Giá</button>
+    </nav>
+  </header>
+
+  <main class="main-container">
+    <!-- TAB 1: PHAN LOAI URL -->
+    <section id="tab-scanner" class="tab-content active">
+      <div class="scanner-hero">
+        <h1>Phân loại Nguy cơ URL Đa lớp</h1>
+        <p>Hệ thống nhận diện 5 lớp nhãn: An toàn (Benign), Lừa đảo (Phishing), Mã độc (Malware), Thay đổi giao diện (Defacement), Độc hại (Malicious).</p>
+      </div>
+
+      <div class="scanner-box card">
+        <div class="box-header">
+          <label for="url-input-area"><strong>Danh sách URL cần phân tích</strong> (mỗi dòng một URL, tối đa 50 URL):</label>
+          <span id="url-counter" class="mono muted">0 URL</span>
+        </div>
+        <textarea id="url-input-area" rows="4" placeholder="https://google.com/search?q=cybersecurity&#10;http://paypal-security-update-account.com/login.php&#10;http://192.168.1.100/admin/payload.exe"></textarea>
+
+        <div class="scanner-actions">
+          <div class="quick-samples">
+            <span class="muted">Mẫu kiểm tra:</span>
+            <button class="sample-btn" data-sample="https://www.google.com/search?q=cybersecurity">Google (An toàn)</button>
+            <button class="sample-btn" data-sample="http://paypal-update-account-verification.online/login.php">PayPal (Lừa đảo)</button>
+            <button class="sample-btn" data-sample="http://192.168.1.50/bin/malware_payload.exe">Trojan (Mã độc)</button>
+            <button class="sample-btn" data-sample="http://zone-h.org/mirror/id/35471239">Zone-H (Defacement)</button>
+          </div>
+          <button id="btn-scan" class="btn btn-primary">
+            <span id="btn-scan-text">Phân tích URL</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Ket qua phan tich -->
+      <div id="scan-results-container" class="results-container"></div>
+    </section>
+
+    <!-- TAB 2: QUAN LY MO HINH -->
+    <section id="tab-models" class="tab-content">
+      <div class="section-hero">
+        <h2>Quản Lý và Nhập Mô Hình (.joblib)</h2>
+        <p>Danh sách các mô hình máy học đã huấn luyện và công cụ nạp mô hình mới vào hệ thống.</p>
+      </div>
+
+      <div class="grid-2col">
+        <!-- Danh sach mo hinh hien co -->
+        <div class="card">
+          <h3>Mô hình hiện có trong hệ thống</h3>
+          <div id="models-list" class="models-grid"></div>
+        </div>
+
+        <!-- Nap mo hinh moi -->
+        <div class="card">
+          <h3>Nạp Mô Hình .joblib Mới</h3>
+          <p class="muted">Hỗ trợ nạp trực tiếp từ đường dẫn file trên máy chủ hoặc tải lên từ máy tính.</p>
+
+          <form id="form-import-model-path" class="import-form">
+            <label><strong>Cách 1: Nhập theo đường dẫn file (.joblib)</strong></label>
+            <input type="text" id="input-model-path" class="input-text" placeholder="E:\AIC211_antigravity\model_output_v4\model_word_char_svm.joblib" value="E:\AIC211_antigravity\model_output_v4\model_word_char_svm.joblib">
+            <button type="submit" class="btn btn-secondary">Nạp từ đường dẫn</button>
+          </form>
+
+          <hr class="separator">
+
+          <form id="form-upload-model-file" class="import-form">
+            <label><strong>Cách 2: Tải lên file .joblib từ trình duyệt</strong></label>
+            <div class="drop-zone" id="model-drop-zone">
+              <p>Nhấp vào đây hoặc kéo thả file <code>.joblib</code> vào khu vực này</p>
+              <input type="file" id="input-model-file" accept=".joblib" class="file-hidden">
+            </div>
+            <button type="submit" id="btn-upload-model" class="btn btn-primary" disabled>Tải lên và kích hoạt</button>
+          </form>
+          <div id="upload-status" class="alert-box" hidden></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: TAP DU LIEU -->
+    <section id="tab-dataset" class="tab-content">
+      <div class="section-hero">
+        <h2>Tập Dữ Liệu và Thống Kê Phân Phối</h2>
+        <p>Thông tin tập dữ liệu tổng hợp 30,640,872 URL và hỗ trợ nạp kiểm tra tệp dữ liệu mới.</p>
+      </div>
+
+      <div class="grid-2col">
+        <div class="card">
+          <h3>Tổng quan tập dữ liệu 30.6 triệu URL</h3>
+          <div class="stat-boxes">
+            <div class="stat-card">
+              <span class="stat-number">30,640,872</span>
+              <span class="stat-desc">Tổng số dòng URL</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-number">5</span>
+              <span class="stat-desc">Số lớp nguy cơ</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-number">23,722,885</span>
+              <span class="stat-desc">Tập huấn luyện (Train)</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-number">2,731,595</span>
+              <span class="stat-desc">Tập kiểm thử (Test)</span>
+            </div>
+          </div>
+
+          <h4 style="margin-top: 20px; margin-bottom: 10px;">Phân bố các lớp nhãn trong dữ liệu:</h4>
+          <div class="distribution-bars">
+            <div class="dist-row"><span>An toàn (Benign): 16,559,786 dòng (54.0%)</span><div class="bar"><div style="width: 54%; background: #10b981;"></div></div></div>
+            <div class="dist-row"><span>Lừa đảo (Phishing): 7,430,910 dòng (24.3%)</span><div class="bar"><div style="width: 24.3%; background: #ef4444;"></div></div></div>
+            <div class="dist-row"><span>Độc hại (Malicious): 3,490,425 dòng (11.4%)</span><div class="bar"><div style="width: 11.4%; background: #e11d48;"></div></div></div>
+            <div class="dist-row"><span>Mã độc (Malware): 2,850,964 dòng (9.3%)</span><div class="bar"><div style="width: 9.3%; background: #f97316;"></div></div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Kiểm tra cấu trúc Dataset mới (.csv / .parquet)</h3>
+          <p class="muted">Nhập đường dẫn file để tự động kiểm tra cột nhãn và hiển thị phân bố số liệu.</p>
+          <form id="form-import-dataset" class="import-form">
+            <label>Đường dẫn file dataset:</label>
+            <input type="text" id="input-dataset-path" class="input-text" placeholder="E:\formats_ready_20261029_021120\unified\export_...\dataset_unified.csv" value="E:\formats_ready_20261029_021120\unified\export_20261030_184412_272903\dataset_unified.csv">
+            <button type="submit" class="btn btn-secondary">Đọc và phân tích</button>
+          </form>
+          <div id="dataset-result" class="dataset-preview-box" hidden></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: BAO CAO DANH GIA -->
+    <section id="tab-metrics" class="tab-content">
+      <div class="section-hero">
+        <h2>Báo Cáo Đánh Giá & Ma Trận Nhầm Lẫn</h2>
+        <p>Kết quả đánh giá trên tập kiểm thử độc lập gồm 2,731,595 dòng URL.</p>
+      </div>
+
+      <div class="card">
+        <h3>Bảng so sánh hiệu năng 3 mô hình</h3>
+        <table class="metrics-table">
+          <thead>
+            <tr>
+              <th>Mô hình</th>
+              <th>Đặc trưng trích xuất</th>
+              <th>Accuracy</th>
+              <th>Precision (Weighted)</th>
+              <th>Recall (Weighted)</th>
+              <th>Weighted-F1</th>
+              <th>Macro-F1</th>
+              <th>Dung lượng file</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="highlight-row">
+              <td><strong>1. Linear SVM</strong></td>
+              <td>Word + char n-grams (3-5 ký tự)</td>
+              <td><span class="badge-green">92.13%</span></td>
+              <td><strong>93.16%</strong></td>
+              <td>92.13%</td>
+              <td><strong>92.26%</strong></td>
+              <td>36.19%</td>
+              <td>3.98 MB</td>
+            </tr>
+            <tr>
+              <td><strong>2. Logistic Regression</strong></td>
+              <td>Word TF-IDF</td>
+              <td><span class="badge-blue">87.53%</span></td>
+              <td>87.58%</td>
+              <td>87.52%</td>
+              <td>87.32%</td>
+              <td>32.32%</td>
+              <td>2.34 MB</td>
+            </tr>
+            <tr>
+              <td><strong>3. Logistic Regression</strong></td>
+              <td>11 đặc trưng cấu trúc (Lexical)</td>
+              <td><span class="badge-yellow">77.08%</span></td>
+              <td>85.82%</td>
+              <td>77.08%</td>
+              <td>80.65%</td>
+              <td>29.73%</td>
+              <td>1.9 KB</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid-3col" style="margin-top: 20px;">
+        <div class="card plot-card">
+          <h4>1. Linear SVM (Word + Char n-grams)</h4>
+          <img src="/reports/cm_word_char_svm.png" alt="Confusion Matrix SVM" class="cm-img" onclick="zoomImage(this, '1. Linear SVM (Word + Char n-grams)')" onerror="this.style.display='none'">
+          <p class="muted" style="font-size: 11px; margin-top: 6px;">(Nhấp vào ảnh để phóng to)</p>
+        </div>
+        <div class="card plot-card">
+          <h4>2. Logistic Regression (TF-IDF)</h4>
+          <img src="/reports/cm_word_tfidf_logistic.png" alt="Confusion Matrix TF-IDF" class="cm-img" onclick="zoomImage(this, '2. Logistic Regression (TF-IDF)')" onerror="this.style.display='none'">
+          <p class="muted" style="font-size: 11px; margin-top: 6px;">(Nhấp vào ảnh để phóng to)</p>
+        </div>
+        <div class="card plot-card">
+          <h4>3. Logistic Regression (Lexical)</h4>
+          <img src="/reports/cm_lexical_logistic.png" alt="Confusion Matrix Lexical" class="cm-img" onclick="zoomImage(this, '3. Logistic Regression (Lexical)')" onerror="this.style.display='none'">
+          <p class="muted" style="font-size: 11px; margin-top: 6px;">(Nhấp vào ảnh để phóng to)</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal phong to anh (Image Lightbox Modal) -->
+  <div id="image-modal" style="display:none !important; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.88); z-index:999999; align-items:center; justify-content:center; padding:20px; box-sizing:border-box;" onclick="if(event.target === this || event.target.id === 'modal-img') closeImageModal();">
+    <div style="background:#1e293b; border:1px solid #334155; border-radius:8px; max-width:92vw; max-height:92vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 25px 50px rgba(0,0,0,0.8);" onclick="event.stopPropagation();">
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 18px; background:#0f172a; border-bottom:1px solid #334155;">
+        <span id="modal-caption" style="color:#ffffff; font-weight:600; font-size:14px; font-family:sans-serif;">Ma Trận Nhầm Lẫn</span>
+        <button type="button" onclick="event.stopPropagation(); closeImageModal();" style="background:transparent; border:none; color:#94a3b8; font-size:28px; cursor:pointer; line-height:1; padding:0 8px;" title="Đóng (ESC)">&times;</button>
+      </div>
+      <div style="padding:16px; display:flex; justify-content:center; align-items:center; background:#020617; overflow:auto;">
+        <img id="modal-img" src="" alt="Ma Trận Nhầm Lẫn Phóng To" style="max-width:85vw; max-height:78vh; object-fit:contain; background:#ffffff; border-radius:4px; cursor:zoom-out;" onclick="event.stopPropagation(); closeImageModal();">
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="footer-content">
+      <span>Đồ án môn học AIC211 · Phân loại URL độc hại sử dụng Machine Learning</span>
+      <span class="muted">Hệ thống phân loại đa lớp trực tiếp trên mô hình huấn luyện độc lập</span>
+    </div>
+  </footer>
+
+  <script>
+    function zoomImage(img, title) {
+      var modal = document.getElementById('image-modal');
+      var mImg = document.getElementById('modal-img');
+      var mCap = document.getElementById('modal-caption');
+      if (!modal || !mImg) return;
+      mImg.src = img.src;
+      if (mCap) mCap.textContent = title || img.alt || 'Ma Trận Nhầm Lẫn';
+      modal.style.setProperty('display', 'flex', 'important');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeImageModal() {
+      var modal = document.getElementById('image-modal');
+      if (!modal) return;
+      modal.style.setProperty('display', 'none', 'important');
+      document.body.style.overflow = '';
+    }
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') closeImageModal();
+    });
+  </script>
+  <script src="/app.js?v=20261031_3"></script>
+</body>
+</html>
