@@ -50,12 +50,12 @@ MODEL_CONFIGS = {
 def build_pipeline(model_key: str) -> Pipeline:
     if model_key == "logistic_tfidf":
         return Pipeline([
-            ("features", TfidfVectorizer(analyzer="word", ngram_range=(1, 2), max_features=50000, sublinear_tf=True)),
+            ("features", TfidfVectorizer(analyzer="word", ngram_range=(1, 2), max_features=50000, sublinear_tf=True, stop_words=["http", "https", "www"])),
             ("classifier", SGDClassifier(loss="log_loss", penalty="l2", alpha=1e-5, max_iter=25, tol=1e-3, random_state=42)),
         ])
     elif model_key == "svm":
         union = FeatureUnion([
-            ("word", TfidfVectorizer(analyzer="word", ngram_range=(1, 2), max_features=35000, sublinear_tf=True)),
+            ("word", TfidfVectorizer(analyzer="word", ngram_range=(1, 2), max_features=35000, sublinear_tf=True, stop_words=["http", "https", "www"])),
             ("char", TfidfVectorizer(analyzer="char", ngram_range=(3, 5), max_features=35000, sublinear_tf=True)),
         ])
         return Pipeline([
@@ -108,52 +108,60 @@ def train_single_model(
     labels: List[str],
     output_dir: Path,
     chunk_size: int = 200000,
+    is_incremental: bool = False,
 ) -> Dict[str, Any]:
     cfg = MODEL_CONFIGS[model_key]
     out_file = output_dir / cfg["file"]
-    print(f"\nHuan luyen [{cfg['name']}] tren {len(urls):,} mau...")
+    mode_str = "Huan luyen tang tien" if (is_incremental and out_file.exists()) else "Huan luyen moi"
+    print(f"\n{mode_str} [{cfg['name']}] tren {len(urls):,} mau...")
     t0 = time.time()
 
-    pipe = build_pipeline(model_key)
     cls_to_idx = {c: i for i, c in enumerate(CLASSES)}
     y_indices = np.array([cls_to_idx[lbl] for lbl in labels], dtype=np.int32)
-
-    unique_classes = np.arange(len(CLASSES))
-    cw = compute_class_weight("balanced", classes=unique_classes, y=y_indices)
-    cw_dict = {int(c): float(w) for c, w in zip(unique_classes, cw)}
-
-    feat_step = pipe.named_steps["features"]
-    clf_step = pipe.named_steps["classifier"]
-    scaler_step = pipe.named_steps.get("scaler")
-
-    clf_step.set_params(class_weight=cw_dict)
-
-    print("  -> Trich xuat dac trung...")
-    t_feat0 = time.time()
-
-    class_buckets: Dict[str, List[str]] = {c: [] for c in CLASSES}
-    for u, lbl in zip(urls, labels):
-        bucket = class_buckets.get(lbl)
-        if bucket is not None and len(bucket) < 75000:
-            bucket.append(u)
-
-    vocab_urls: List[str] = []
-    for c in CLASSES:
-        vocab_urls.extend(class_buckets[c])
-
-    random.seed(42)
-    random.shuffle(vocab_urls)
-    feat_step.fit(vocab_urls)
-    t_feat = round(time.time() - t_feat0, 2)
-    print(f"  -> Xong tu dien / dac trung tren {len(vocab_urls):,} mau phan tang trong {t_feat}s")
-
-    if scaler_step is not None:
-        sample_x = feat_step.transform(vocab_urls[:min(50000, len(vocab_urls))])
-        scaler_step.fit(sample_x)
-        del sample_x
-        gc.collect()
-
     all_class_indices = np.arange(len(CLASSES))
+
+    if is_incremental and out_file.exists():
+        saved_obj = joblib.load(out_file)
+        pipe = saved_obj["pipeline"]
+        feat_step = pipe.named_steps["features"]
+        clf_step = pipe.named_steps["classifier"]
+        scaler_step = pipe.named_steps.get("scaler")
+        print(f"  -> Da nap trong so mo hinh cu tu {out_file.name} de tiep tuc hoc.")
+    else:
+        pipe = build_pipeline(model_key)
+        feat_step = pipe.named_steps["features"]
+        clf_step = pipe.named_steps["classifier"]
+        scaler_step = pipe.named_steps.get("scaler")
+
+        unique_classes = np.arange(len(CLASSES))
+        cw = compute_class_weight("balanced", classes=unique_classes, y=y_indices)
+        cw_dict = {int(c): float(w) for c, w in zip(unique_classes, cw)}
+        clf_step.set_params(class_weight=cw_dict)
+
+        print("  -> Trich xuat dac trung...")
+        t_feat0 = time.time()
+
+        class_buckets: Dict[str, List[str]] = {c: [] for c in CLASSES}
+        for u, lbl in zip(urls, labels):
+            bucket = class_buckets.get(lbl)
+            if bucket is not None and len(bucket) < 75000:
+                bucket.append(u)
+
+        vocab_urls: List[str] = []
+        for c in CLASSES:
+            vocab_urls.extend(class_buckets[c])
+
+        random.seed(42)
+        random.shuffle(vocab_urls)
+        feat_step.fit(vocab_urls)
+        t_feat = round(time.time() - t_feat0, 2)
+        print(f"  -> Xong tu dien / dac trung tren {len(vocab_urls):,} mau phan tang trong {t_feat}s")
+
+        if scaler_step is not None:
+            sample_x = feat_step.transform(vocab_urls[:min(50000, len(vocab_urls))])
+            scaler_step.fit(sample_x)
+            del sample_x
+            gc.collect()
 
     if len(urls) > chunk_size and hasattr(clf_step, "partial_fit"):
         indices = np.arange(len(urls), dtype=np.int32)
@@ -190,7 +198,12 @@ def train_single_model(
         x_all = feat_step.transform(shuffled_urls)
         if scaler_step is not None:
             x_all = scaler_step.transform(x_all)
-        clf_step.fit(x_all, shuffled_y)
+
+        if hasattr(clf_step, "partial_fit"):
+            clf_step.partial_fit(x_all, shuffled_y, classes=all_class_indices)
+        else:
+            clf_step.fit(x_all, shuffled_y)
+
         del x_all, shuffled_urls, shuffled_y
         gc.collect()
 
@@ -202,6 +215,9 @@ def train_single_model(
         "model_name": model_key,
     }
     joblib.dump(save_data, out_file, compress=3)
+    web_dir = Path(__file__).resolve().parent.parent / "web" / "models"
+    if web_dir.exists() and out_file.parent.resolve() != web_dir.resolve():
+        joblib.dump(save_data, web_dir / out_file.name, compress=3)
     elapsed = round(time.time() - t0, 2)
     speed = int(len(urls) / max(elapsed, 0.1))
     size_mb = round(out_file.stat().st_size / (1024 * 1024), 2)
@@ -222,6 +238,7 @@ def run_train(
     output_dir: Optional[str] = None,
     model_choice: str = "all",
     samples: Optional[int] = None,
+    is_incremental: bool = False,
 ) -> List[Path]:
     in_path = Path(input_file) if input_file else (DATA_PROCESSED_DIR / "train.csv")
     if not in_path.exists():
@@ -255,7 +272,7 @@ def run_train(
     saved_paths = []
 
     for key in targets:
-        info = train_single_model(key, urls, labels, out_d)
+        info = train_single_model(key, urls, labels, out_d, is_incremental=is_incremental)
         summary_list.append(info)
         saved_paths.append(info["path"])
 
@@ -270,13 +287,18 @@ def run_train(
     logger.info(f"Hoan thanh Buoc 07 -> Huan luyen xong {len(saved_paths)} mo hinh trong {total_sec}s")
     return saved_paths
 
-def prompt_menu_input() -> Tuple[Optional[str], Optional[str], str, Optional[int]]:
+def prompt_menu_input() -> Tuple[Optional[str], Optional[str], str, Optional[int], bool]:
     default_in = str(DATA_PROCESSED_DIR / "train.csv")
     default_out = str(MODELS_DIR)
 
     print("\nBuoc 07: Huan luyen mo hinh (Train Models)")
     ans_in = input(f"File du lieu train [Enter={Path(default_in).name}]: ").strip()
     in_file = ans_in if ans_in else default_in
+
+    print("1. Huan luyen moi tu dau (Xoa cu hoc lai tu dau - Mac dinh)")
+    print("2. Huan luyen tang tien tiep tuc (Giu nguyen trong so cu, hoc them du lieu)")
+    choice_inc = input("Chon [1-2, Enter=1]: ").strip()
+    is_inc = (choice_inc == "2")
 
     print("1. Huan luyen toan bo ca 3 mo hinh (Mac dinh)")
     print("2. Chi huan luyen Logistic Regression TF-IDF")
@@ -304,18 +326,19 @@ def prompt_menu_input() -> Tuple[Optional[str], Optional[str], str, Optional[int
     else:
         samples = None
 
-    return in_file, default_out, target_model, samples
+    return in_file, default_out, target_model, samples, is_inc
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
-        in_f, out_d, mdl, smp = prompt_menu_input()
-        run_train(input_file=in_f, output_dir=out_d, model_choice=mdl, samples=smp)
+        in_f, out_d, mdl, smp, inc = prompt_menu_input()
+        run_train(input_file=in_f, output_dir=out_d, model_choice=mdl, samples=smp, is_incremental=inc)
     else:
         parser = argparse.ArgumentParser(description="Buoc 07: Huan luyen mo hinh (Train)")
         parser.add_argument("-i", "--input", default=None, help="Tep train.csv")
         parser.add_argument("-o", "--output", default=None, help="Thu muc luu model")
         parser.add_argument("-m", "--model", default="all", choices=["logistic_tfidf", "svm", "logistic_lexical", "all"], help="Chon mo hinh")
         parser.add_argument("-s", "--samples", type=int, default=None, help="So luong mau train")
+        parser.add_argument("--incremental", action="store_true", help="Hoc tang tien tiep tuc")
         args = parser.parse_args()
 
-        run_train(input_file=args.input, output_dir=args.output, model_choice=args.model, samples=args.samples)
+        run_train(input_file=args.input, output_dir=args.output, model_choice=args.model, samples=args.samples, is_incremental=args.incremental)

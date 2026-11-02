@@ -47,3 +47,8 @@ Thumbs.db
 desktop.ini
 
 data/
+
+# Archives
+*.zip
+*.tar.gz
+*.7z

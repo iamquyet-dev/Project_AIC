@@ -5,8 +5,8 @@ from pathlib import Path
 import sys
 import time
 
-STEPS_DIR = Path(__file__).resolve().parent / "steps"
-PROJECT_ROOT = Path(__file__).resolve().parent
+STEPS_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = STEPS_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -110,8 +110,8 @@ def interactive_menu():
             run_dataset_split(input_file=in_f, train_ratio=tr, val_ratio=vr, test_ratio=te, max_samples=s_cnt)
         elif choice == "7":
             from steps.step_07_train import prompt_menu_input as p_tr
-            in_f, out_d, mdl, s_cnt = p_tr()
-            run_train(input_file=in_f, output_dir=out_d, model_choice=mdl, samples=s_cnt)
+            in_f, out_d, mdl, s_cnt, inc = p_tr()
+            run_train(input_file=in_f, output_dir=out_d, model_choice=mdl, samples=s_cnt, is_incremental=inc)
         elif choice == "8":
             from steps.step_08_evaluate import prompt_menu_input as p_ev
             in_f, mdl, s_cnt = p_ev()

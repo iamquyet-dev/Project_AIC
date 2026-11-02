@@ -1,3 +1,6 @@
+"""AIC211 URL Threat Defense Platform - Independent Web Server
+Supports real-time URL classification, Model switching, Model & Dataset importing.
+"""
 from __future__ import annotations
 
 import sys
@@ -21,12 +24,10 @@ from urllib.parse import parse_qs, urlsplit
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-try:
-    import pandas as pd
-except ImportError:
-    pd = None
+import pandas as pd
 from core import REGISTRY, predict_urls, CLASS_LABELS, CLASS_COLORS, LexicalFeatureExtractor
 
+# Bind to __main__ for joblib/pickle unpickling
 import __main__
 import types
 setattr(__main__, "LexicalFeatureExtractor", LexicalFeatureExtractor)
@@ -43,12 +44,9 @@ REPORTS_DIR = ROOT / "reports"
 
 UPLOADS_DIR.mkdir(exist_ok=True)
 
+
 class WebAppHandler(BaseHTTPRequestHandler):
     server_version = "AIC211-Engine/1.0"
-
-    def log_message(self, format, *args):
-        sys.stdout.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {self.address_string()} - {format % args}\n")
-        sys.stdout.flush()
 
     def send_json(self, status: int, data: dict | list):
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -130,6 +128,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.send_file_response(target_f)
             return
 
+        # Serve static web frontend
         if path == "/" or path == "/index.html":
             self.send_file_response(STATIC_DIR / "index.html", "text/html; charset=utf-8")
             return
@@ -140,6 +139,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.send_file_response(STATIC_DIR / "app.js", "application/javascript; charset=utf-8")
             return
 
+        # Check in static directory
         candidate = STATIC_DIR / path.lstrip("/")
         if candidate.is_file():
             self.send_file_response(candidate)
@@ -151,6 +151,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
         url_parts = urlsplit(self.path)
         path = url_parts.path
 
+        # 1. URL Prediction
         if path == "/api/predict":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -175,6 +176,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 self.send_json(500, {"error": f"Lỗi dự đoán: {str(e)}"})
             return
 
+        # 2. Select Active Model
         if path == "/api/models/select":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -193,6 +195,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 self.send_json(500, {"error": str(e)})
             return
 
+        # 3. Upload & Import Joblib Model
         if path == "/api/upload_model":
             content_type = self.headers.get("Content-Type", "")
             try:
@@ -258,6 +261,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 self.send_json(500, {"error": f"Lỗi nạp model: {str(e)}"})
             return
 
+        # 4. Import Dataset (File path or upload)
         if path == "/api/upload_dataset":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -269,34 +273,15 @@ class WebAppHandler(BaseHTTPRequestHandler):
                     return
 
                 p = Path(dataset_path)
-                if pd is not None:
-                    if p.suffix.lower() == ".parquet":
-                        df = pd.read_parquet(p)
-                    else:
-                        df = pd.read_csv(p, nrows=50000)
-                    cols = df.columns.tolist()
-                    label_candidates = [c for c in cols if c.lower() in ("label", "source_label", "label_raw", "type", "class")]
-                    label_col = label_candidates[0] if label_candidates else (cols[1] if len(cols) > 1 else cols[0])
-                    dist = {str(k): int(v) for k, v in df[label_col].value_counts().items()}
-                    sample_count = len(df)
-                    preview_records = df.head(10).to_dict(orient="records")
+                if p.suffix.lower() == ".parquet":
+                    df = pd.read_parquet(p)
                 else:
-                    import csv
-                    preview_records = []
-                    cols = []
-                    sample_count = 0
-                    with open(p, "r", encoding="utf-8", errors="ignore") as f_in:
-                        reader = csv.DictReader(f_in)
-                        cols = reader.fieldnames or []
-                        for i, r in enumerate(reader):
-                            if i < 10:
-                                preview_records.append(r)
-                            sample_count += 1
-                            if sample_count >= 50000:
-                                break
-                    label_candidates = [c for c in cols if c.lower() in ("label", "source_label", "label_raw", "type", "class")]
-                    label_col = label_candidates[0] if label_candidates else (cols[1] if len(cols) > 1 else cols[0])
-                    dist = {"total": sample_count}
+                    df = pd.read_csv(p, nrows=50000)
+
+                cols = df.columns.tolist()
+                label_candidates = [c for c in cols if c.lower() in ("label", "source_label", "label_raw", "type", "class")]
+                label_col = label_candidates[0] if label_candidates else (cols[1] if len(cols) > 1 else cols[0])
+                dist = {str(k): int(v) for k, v in df[label_col].value_counts().items()}
 
                 meta_info = {
                     "path": str(p),
@@ -304,9 +289,9 @@ class WebAppHandler(BaseHTTPRequestHandler):
                     "file_size_mb": round(p.stat().st_size / (1024 * 1024), 2),
                     "columns": cols,
                     "label_column": label_col,
-                    "sample_rows": sample_count,
+                    "sample_rows": len(df),
                     "class_distribution": dist,
-                    "preview": preview_records
+                    "preview": df.head(10).to_dict(orient="records")
                 }
                 (REPORTS_DIR / "dataset_active.json").write_text(json.dumps(meta_info, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -321,12 +306,13 @@ class WebAppHandler(BaseHTTPRequestHandler):
 
         self.send_json(404, {"error": "API không tồn tại"})
 
+
 def run_server(host="0.0.0.0", port=8501):
     server = ThreadingHTTPServer((host, port), WebAppHandler)
     print("=" * 70)
     print(" AIC211 CYBERSECURITY WEB PLATFORM (PHÂN LOẠI URL ĐA LỚP)")
     print(f" Web đang chạy tại: http://localhost:{port} (và http://{host}:{port})")
-    print(f" Thư mục Model:      {MODELS_DIR}")
+    print(" Thư mục Model:      E:\\AIC211_web\\models")
     print(" Bấm Ctrl + C để dừng server.")
     print("=" * 70)
     try:
@@ -335,6 +321,7 @@ def run_server(host="0.0.0.0", port=8501):
         pass
     finally:
         server.server_close()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

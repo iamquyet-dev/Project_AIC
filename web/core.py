@@ -1,3 +1,6 @@
+"""AIC211 URL Threat Detection - Core Module (Academic Standard Engine)
+Xu ly trich xuat dac trung, quan ly mo hinh, suy luan va danh gia.
+"""
 from __future__ import annotations
 
 from collections import Counter
@@ -34,10 +37,25 @@ LEXICAL_FEATURE_NAMES = [
 ]
 
 CLASS_LABELS = {
+    "benign": "An toàn (Benign)",
+    "phishing": "Lừa đảo (Phishing)",
+    "malware": "Mã độc (Malware)",
+    "defacement": "Giao diện (Defacement)",
+    "malicious": "Độc hại (Malicious)",
+    "0": "An toàn (0)",
+    "1": "Độc hại (1)",
 }
 
 CLASS_COLORS = {
+    "benign": "#10b981",
+    "0": "#10b981",
+    "phishing": "#ef4444",
+    "malware": "#f97316",
+    "defacement": "#8b5cf6",
+    "malicious": "#e11d48",
+    "1": "#e11d48",
 }
+
 
 def format_file_size(size_bytes: int) -> str:
     if size_bytes < 1024:
@@ -47,6 +65,7 @@ def format_file_size(size_bytes: int) -> str:
     else:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
 
+
 def calc_entropy(text: str) -> float:
     if not text:
         return 0.0
@@ -54,7 +73,9 @@ def calc_entropy(text: str) -> float:
     counts = Counter(text)
     return round(-sum((c / n) * math.log2(c / n) for c in counts.values()), 6)
 
+
 class LexicalFeatureExtractor(BaseEstimator, TransformerMixin):
+    """Trích xuất 11 đặc trưng cấu trúc và từ vựng từ chuỗi URL."""
 
     def __init__(self):
         pass
@@ -107,6 +128,8 @@ class LexicalFeatureExtractor(BaseEstimator, TransformerMixin):
     def get_feature_names_out(self, input_features=None):
         return np.array(LEXICAL_FEATURE_NAMES, dtype=object)
 
+
+# Unpickling compatibility bridge for joblib/pickle
 import __main__
 import types
 
@@ -119,6 +142,7 @@ if "train_three_models" not in sys.modules:
     _fake_mod.SUSPICIOUS_TOKENS = SUSPICIOUS_TOKENS
     _fake_mod.LEXICAL_FEATURE_NAMES = LEXICAL_FEATURE_NAMES
     sys.modules["train_three_models"] = _fake_mod
+
 
 def tokenize_url(url: str) -> dict:
     raw_tokens = re.findall(r"[A-Za-z0-9]+", url)
@@ -140,6 +164,7 @@ def tokenize_url(url: str) -> dict:
         "length": len(url),
     }
 
+
 class ModelRegistry:
     def __init__(self, models_dir: Path):
         self.models_dir = models_dir
@@ -150,10 +175,22 @@ class ModelRegistry:
     def _discover_models(self):
         default_specs = {
             "model_word_char_svm": {
+                "name": "Word + char n-grams · Linear SVM",
+                "file": "model_word_char_svm.joblib",
+                "desc": "Mô hình Linear SVM kết hợp từ vựng và chuỗi n-gram ký tự (3-5 ký tự).",
+                "type": "svm",
             },
             "model_word_tfidf_logistic": {
+                "name": "Word TF-IDF · Logistic Regression",
+                "file": "model_word_tfidf_logistic.joblib",
+                "desc": "Mô hình Hồi quy Logistic kết hợp đặc trưng tần suất từ vựng TF-IDF.",
+                "type": "logistic",
             },
             "model_lexical_logistic": {
+                "name": "Lexical features · Logistic Regression",
+                "file": "model_lexical_logistic.joblib",
+                "desc": "Mô hình Hồi quy Logistic huấn luyện trên 11 đặc trưng cấu trúc URL.",
+                "type": "lexical",
             },
         }
 
@@ -173,6 +210,7 @@ class ModelRegistry:
                     "path": str(f_path),
                 }
 
+        # Check for any custom uploaded joblib files
         for f in self.models_dir.glob("*.joblib"):
             if f.name.startswith(".vocab_cache"):
                 continue
@@ -186,6 +224,7 @@ class ModelRegistry:
                     "file_size_bytes": f_bytes,
                     "file_size_human": format_file_size(f_bytes),
                     "file_size_mb": round(f_bytes / (1024 * 1024), 2),
+                    "description": "Mô hình người dùng nạp vào hệ thống.",
                     "path": str(f),
                 }
 
@@ -260,6 +299,7 @@ class ModelRegistry:
             "file_size_bytes": f_bytes,
             "file_size_human": format_file_size(f_bytes),
             "file_size_mb": round(f_bytes / (1024 * 1024), 2),
+            "description": "Mô hình người dùng nạp vào hệ thống.",
             "path": str(dest_path),
         }
         self.active_model_key = key
@@ -268,7 +308,10 @@ class ModelRegistry:
         self.get_model(key)
         return key
 
+
+# Global Registry Instance
 REGISTRY = ModelRegistry(MODELS_DIR)
+
 
 def predict_urls(urls: list[str], model_key: str | None = None) -> list[dict]:
     model_obj = REGISTRY.get_model(model_key)

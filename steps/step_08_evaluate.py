@@ -153,10 +153,18 @@ def run_evaluate(
     return results
 
 def prompt_menu_input() -> Tuple[Optional[str], str, Optional[int]]:
-    default_test = str(DATA_PROCESSED_DIR / "test.csv")
     print("\nBuoc 08: Danh gia mo hinh (Evaluate Models)")
-    ans_file = input(f"File kiem thu [Enter={Path(default_test).name}]: ").strip()
-    in_file = ans_file if ans_file else default_test
+    print("1. Tap test.csv (Kiem thu cuoi cung - Mac dinh)")
+    print("2. Tap val.csv (Kiem dinh thu nghiem)")
+    print("3. Tu nhap duong dan file khac")
+    choice_f = input("Chon tap du lieu [1-3, Enter=1]: ").strip()
+    if choice_f == "2":
+        in_file = str(DATA_PROCESSED_DIR / "val.csv")
+    elif choice_f == "3":
+        custom = input("Nhap duong dan file: ").strip()
+        in_file = custom if custom else str(DATA_PROCESSED_DIR / "test.csv")
+    else:
+        in_file = str(DATA_PROCESSED_DIR / "test.csv")
 
     print("1. Danh gia ca 3 mo hinh va so sanh (Mac dinh)")
     print("2. Chi danh gia Logistic Regression TF-IDF")
@@ -195,7 +203,7 @@ if __name__ == "__main__":
         run_evaluate(test_file=in_f, model_name=mdl, samples=smp)
     else:
         parser = argparse.ArgumentParser(description="Buoc 08: Danh gia mo hinh (Evaluate)")
-        parser.add_argument("-i", "--input", default=None, help="Tep kiem thu (test.csv)")
+        parser.add_argument("-i", "--input", default=None, help="Tep kiem thu (test.csv hoac val.csv)")
         parser.add_argument("-m", "--model", default="all", choices=["logistic_tfidf", "svm", "logistic_lexical", "all"], help="Ten mo hinh")
         parser.add_argument("-s", "--samples", type=int, default=None, help="So luong mau kiem thu")
         args = parser.parse_args()
