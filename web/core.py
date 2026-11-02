@@ -1,6 +1,3 @@
-"""AIC211 URL Threat Detection - Core Module (Academic Standard Engine)
-Xu ly trich xuat dac trung, quan ly mo hinh, suy luan va danh gia.
-"""
 from __future__ import annotations
 
 from collections import Counter
@@ -12,6 +9,7 @@ from pathlib import Path
 import re
 import sys
 import time
+import types
 from urllib.parse import urlsplit
 
 import joblib
@@ -75,7 +73,6 @@ def calc_entropy(text: str) -> float:
 
 
 class LexicalFeatureExtractor(BaseEstimator, TransformerMixin):
-    """Trích xuất 11 đặc trưng cấu trúc và từ vựng từ chuỗi URL."""
 
     def __init__(self):
         pass
@@ -129,19 +126,30 @@ class LexicalFeatureExtractor(BaseEstimator, TransformerMixin):
         return np.array(LEXICAL_FEATURE_NAMES, dtype=object)
 
 
-# Unpickling compatibility bridge for joblib/pickle
 import __main__
-import types
 
 setattr(__main__, "LexicalFeatureExtractor", LexicalFeatureExtractor)
 
-if "train_three_models" not in sys.modules:
-    _fake_mod = types.ModuleType("train_three_models")
-    _fake_mod.LexicalFeatureExtractor = LexicalFeatureExtractor
-    _fake_mod.calc_entropy = calc_entropy
-    _fake_mod.SUSPICIOUS_TOKENS = SUSPICIOUS_TOKENS
-    _fake_mod.LEXICAL_FEATURE_NAMES = LEXICAL_FEATURE_NAMES
-    sys.modules["train_three_models"] = _fake_mod
+for mod_name in (
+    "train_three_models",
+    "url_detector",
+    "url_detector.extractor",
+    "url_detector.common",
+    "url_detector.detector",
+    "url_detector.config",
+    "url_detector.model_runtime",
+    "url_detector.thresholded",
+):
+    if mod_name not in sys.modules:
+        m = types.ModuleType(mod_name)
+        m.LexicalFeatureExtractor = LexicalFeatureExtractor
+        m.calc_entropy = calc_entropy
+        m.SUSPICIOUS_TOKENS = SUSPICIOUS_TOKENS
+        m.LEXICAL_FEATURE_NAMES = LEXICAL_FEATURE_NAMES
+        sys.modules[mod_name] = m
+
+if "url_detector" in sys.modules and "url_detector.extractor" in sys.modules:
+    sys.modules["url_detector"].extractor = sys.modules["url_detector.extractor"]
 
 
 def tokenize_url(url: str) -> dict:
@@ -210,7 +218,6 @@ class ModelRegistry:
                     "path": str(f_path),
                 }
 
-        # Check for any custom uploaded joblib files
         for f in self.models_dir.glob("*.joblib"):
             if f.name.startswith(".vocab_cache"):
                 continue
@@ -309,7 +316,6 @@ class ModelRegistry:
         return key
 
 
-# Global Registry Instance
 REGISTRY = ModelRegistry(MODELS_DIR)
 
 

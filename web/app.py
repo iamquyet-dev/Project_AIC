@@ -1,6 +1,3 @@
-"""AIC211 URL Threat Defense Platform - Independent Web Server
-Supports real-time URL classification, Model switching, Model & Dataset importing.
-"""
 from __future__ import annotations
 
 import sys
@@ -16,26 +13,43 @@ import json
 import mimetypes
 import os
 from pathlib import Path
+import re
 import shutil
-import sys
 import time
+import types
 from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+if str(ROOT.parent) not in sys.path:
+    sys.path.insert(0, str(ROOT.parent))
 
 import pandas as pd
-from core import REGISTRY, predict_urls, CLASS_LABELS, CLASS_COLORS, LexicalFeatureExtractor
+from core import REGISTRY, predict_urls, CLASS_LABELS, CLASS_COLORS, LexicalFeatureExtractor, calc_entropy, SUSPICIOUS_TOKENS, LEXICAL_FEATURE_NAMES
 
-# Bind to __main__ for joblib/pickle unpickling
 import __main__
-import types
 setattr(__main__, "LexicalFeatureExtractor", LexicalFeatureExtractor)
 
-if "train_three_models" not in sys.modules:
-    _fake_mod = types.ModuleType("train_three_models")
-    _fake_mod.LexicalFeatureExtractor = LexicalFeatureExtractor
-    sys.modules["train_three_models"] = _fake_mod
+for mod_name in (
+    "train_three_models",
+    "url_detector",
+    "url_detector.extractor",
+    "url_detector.common",
+    "url_detector.detector",
+    "url_detector.config",
+    "url_detector.model_runtime",
+    "url_detector.thresholded",
+):
+    if mod_name not in sys.modules:
+        m = types.ModuleType(mod_name)
+        m.LexicalFeatureExtractor = LexicalFeatureExtractor
+        m.calc_entropy = calc_entropy
+        m.SUSPICIOUS_TOKENS = SUSPICIOUS_TOKENS
+        m.LEXICAL_FEATURE_NAMES = LEXICAL_FEATURE_NAMES
+        sys.modules[mod_name] = m
+
+if "url_detector" in sys.modules and "url_detector.extractor" in sys.modules:
+    sys.modules["url_detector"].extractor = sys.modules["url_detector.extractor"]
 
 MODELS_DIR = ROOT / "models"
 UPLOADS_DIR = ROOT / "uploads"
@@ -128,7 +142,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.send_file_response(target_f)
             return
 
-        # Serve static web frontend
         if path == "/" or path == "/index.html":
             self.send_file_response(STATIC_DIR / "index.html", "text/html; charset=utf-8")
             return
@@ -139,7 +152,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.send_file_response(STATIC_DIR / "app.js", "application/javascript; charset=utf-8")
             return
 
-        # Check in static directory
         candidate = STATIC_DIR / path.lstrip("/")
         if candidate.is_file():
             self.send_file_response(candidate)
@@ -151,7 +163,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
         url_parts = urlsplit(self.path)
         path = url_parts.path
 
-        # 1. URL Prediction
         if path == "/api/predict":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -176,7 +187,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 self.send_json(500, {"error": f"Lỗi dự đoán: {str(e)}"})
             return
 
-        # 2. Select Active Model
         if path == "/api/models/select":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -195,7 +205,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 self.send_json(500, {"error": str(e)})
             return
 
-        # 3. Upload & Import Joblib Model
         if path == "/api/upload_model":
             content_type = self.headers.get("Content-Type", "")
             try:
@@ -261,7 +270,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 self.send_json(500, {"error": f"Lỗi nạp model: {str(e)}"})
             return
 
-        # 4. Import Dataset (File path or upload)
         if path == "/api/upload_dataset":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -312,7 +320,6 @@ def run_server(host="0.0.0.0", port=8501):
     print("=" * 70)
     print(" AIC211 CYBERSECURITY WEB PLATFORM (PHÂN LOẠI URL ĐA LỚP)")
     print(f" Web đang chạy tại: http://localhost:{port} (và http://{host}:{port})")
-    print(" Thư mục Model:      E:\\AIC211_web\\models")
     print(" Bấm Ctrl + C để dừng server.")
     print("=" * 70)
     try:
