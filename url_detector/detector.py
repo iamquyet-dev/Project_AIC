@@ -61,7 +61,7 @@ class ThreatDetector:
         results = []
         for i, url in enumerate(urls):
             pred_idx = preds[i]
-            if isinstance(pred_idx, (int, np.integer)) and self.classes and pred_idx < len(self.classes):
+            if isinstance(pred_idx, (int, np.integer)) and self.classes and 0 <= pred_idx < len(self.classes):
                 label = self.classes[pred_idx]
             else:
                 label = str(pred_idx)
@@ -75,8 +75,9 @@ class ThreatDetector:
                         prob_dist[c_name] = round(float(prob_row[c_idx]), 4)
                 confidence = float(np.max(prob_row))
 
-            is_threat = label.lower() not in ("benign", "0", "safe")
-            threat_score = 1.0 - prob_dist.get("benign", 0.0) if "benign" in prob_dist else (1.0 if is_threat else 0.0)
+            label_is_threat = label.lower() not in ("benign", "0", "safe")
+            threat_score = 1.0 - prob_dist.get("benign", 0.0) if "benign" in prob_dist else (1.0 if label_is_threat else 0.0)
+            is_threat = threat_score >= self.threshold
 
             results.append({
                 "url": url,

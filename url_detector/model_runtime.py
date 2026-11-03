@@ -36,9 +36,9 @@ class ModelRuntime:
             size_mb = round(fpath.stat().st_size / (1024 * 1024), 2) if exists else 0.0
             available.append({
                 "key": key,
-                "id": reg["id"],
-                "name": reg["name"],
-                "feature_type": reg["feature_type"],
+                "id": reg.get("id", key),
+                "name": reg.get("name", key),
+                "feature_type": reg.get("feature_type", key),
                 "file_path": str(fpath),
                 "exists": exists,
                 "size_mb": size_mb,
@@ -116,7 +116,7 @@ class ModelRuntime:
 
         labels = []
         for p in raw_preds:
-            if isinstance(p, (int, np.integer)) and classes and p < len(classes):
+            if isinstance(p, (int, np.integer)) and classes and 0 <= p < len(classes):
                 labels.append(classes[p])
             else:
                 labels.append(str(p))
@@ -129,6 +129,8 @@ class ModelRuntime:
         batch_size: int = BATCH_SIZE,
         model_name: Optional[str] = None
     ) -> Tuple[List[str], Optional[np.ndarray]]:
+        if batch_size <= 0:
+            raise ValueError("batch_size phai duong")
         target_model = model_name or self.active_model_name
         model_entry = self.load_model(target_model)
         pipe = model_entry["pipeline"]
@@ -145,6 +147,6 @@ class ModelRuntime:
             if has_proba:
                 all_probs.append(pipe.predict_proba(chunk))
 
-        final_labels = [classes[idx] if isinstance(idx, (int, np.integer)) and idx < len(classes) else str(idx) for idx in all_preds]
+        final_labels = [classes[idx] if isinstance(idx, (int, np.integer)) and 0 <= idx < len(classes) else str(idx) for idx in all_preds]
         final_probs = np.vstack(all_probs) if has_proba and all_probs else None
         return final_labels, final_probs

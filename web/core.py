@@ -294,6 +294,8 @@ class ModelRegistry:
         test_load = joblib.load(file_path)
         dest_path = self.models_dir / file_path.name
         if file_path != dest_path:
+            if dest_path.exists():
+                raise FileExistsError(f"Mô hình đã tồn tại: {dest_path.name}")
             import shutil
             shutil.copy2(file_path, dest_path)
 

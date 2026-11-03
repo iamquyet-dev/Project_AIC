@@ -21,18 +21,17 @@ class ThresholdManager:
         self.critical_threshold = critical_threshold
 
     def determine_threat_level(self, threat_prob: float) -> Dict[str, Any]:
+        if not np.isfinite(threat_prob) or not 0.0 <= threat_prob <= 1.0:
+            raise ValueError("Xac suat de doa phai nam trong khoang 0..1")
         if threat_prob >= self.critical_threshold:
-            return {
-            }
+            level = "critical"
         elif threat_prob >= self.default_threshold:
-            return {
-            }
+            level = "dangerous"
         elif threat_prob >= self.suspicious_threshold:
-            return {
-            }
+            level = "suspicious"
         else:
-            return {
-            }
+            level = "safe"
+        return {"level": level, "is_threat": threat_prob >= self.default_threshold, "score": float(threat_prob)}
 
     @staticmethod
     def sweep_thresholds(

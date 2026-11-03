@@ -1,5 +1,11 @@
 'use strict';
 
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[ch]);
+}
+
 const state = {
   activeModel: 'model_word_char_svm',
   models: [],
@@ -76,18 +82,19 @@ function renderModelsList() {
     card.className = `model-card-item ${isAct ? 'active-model' : ''}`;
     card.innerHTML = `
       <div class="model-info">
-        <h4>${m.name} ${isAct ? '<span class="badge-active">Đang sử dụng</span>' : ''}</h4>
-        <p>${m.description || ''}</p>
-        <p class="mono muted" style="margin-top: 4px;">File: ${m.file} · Dung lượng: ${sizeStr}</p>
+        <h4>${escapeHtml(m.name)} ${isAct ? '<span class="badge-active">Đang sử dụng</span>' : ''}</h4>
+        <p>${escapeHtml(m.description || '')}</p>
+        <p class="mono muted" style="margin-top: 4px;">File: ${escapeHtml(m.file)} · Dung lượng: ${escapeHtml(sizeStr)}</p>
       </div>
       <div>
         ${
           isAct
             ? '<button class="btn btn-secondary btn-sm" disabled>Đang sử dụng</button>'
-            : `<button class="btn btn-primary btn-sm" onclick="selectModel('${m.id}')">Kích hoạt</button>`
+            : '<button class="btn btn-primary btn-sm">Kích hoạt</button>'
         }
       </div>
     `;
+    if (!isAct) card.querySelector('button').addEventListener('click', () => selectModel(m.id));
     container.appendChild(card);
   });
 }
@@ -161,7 +168,7 @@ document.getElementById('btn-scan').addEventListener('click', async () => {
 
     renderResults(data);
   } catch (err) {
-    container.innerHTML = `<div class="alert-box" style="background: rgba(239,68,68,0.2); color:#fca5a5;">Lỗi: ${err.message}</div>`;
+    container.innerHTML = `<div class="alert-box" style="background: rgba(239,68,68,0.2); color:#fca5a5;">Lỗi: ${escapeHtml(err.message)}</div>`;
   } finally {
     btnScan.disabled = false;
     btnScanText.textContent = 'Phân tích URL';
@@ -172,8 +179,8 @@ function renderResults(data) {
   const container = document.getElementById('scan-results-container');
   container.innerHTML = `
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
-      <h3>Kết quả phân tích (${data.total_scanned} URL · ${data.elapsed_ms} ms)</h3>
-      <span class="mono muted">Mô hình: ${data.model_used}</span>
+      <h3>Kết quả phân tích (${Number(data.total_scanned)} URL · ${Number(data.elapsed_ms)} ms)</h3>
+      <span class="mono muted">Mô hình: ${escapeHtml(data.model_used)}</span>
     </div>
   `;
 
@@ -185,7 +192,7 @@ function renderResults(data) {
     for (const [clsName, probVal] of Object.entries(item.probabilities)) {
       const col = CLASS_COLORS[clsName] || '#3b82f6';
       const pct = (probVal * 100).toFixed(1);
-      const labelDisplayName = CLASS_NAME_MAP[clsName] || clsName;
+      const labelDisplayName = escapeHtml(CLASS_NAME_MAP[clsName] || clsName);
       barsHtml += `
         <div class="prob-item">
           <div class="prob-title">
@@ -200,14 +207,14 @@ function renderResults(data) {
     }
 
     const suspiciousTag = item.details.suspicious_found && item.details.suspicious_found.length
-      ? `<span style="color:#ef4444; font-weight:600;">Từ khóa cảnh báo: ${item.details.suspicious_found.join(', ')}</span>`
+      ? `<span style="color:#ef4444; font-weight:600;">Từ khóa cảnh báo: ${escapeHtml(item.details.suspicious_found.join(', '))}</span>`
       : '<span style="color:#10b981;">Không phát hiện từ khóa lừa đảo</span>';
 
     card.innerHTML = `
       <div class="result-header">
         <div class="result-url-wrap">
-          <span class="verdict-badge ${item.risk_level}">${item.verdict}</span>
-          <span class="result-url">${item.url}</span>
+          <span class="verdict-badge ${escapeHtml(item.risk_level)}">${escapeHtml(item.verdict)}</span>
+          <span class="result-url">${escapeHtml(item.url)}</span>
         </div>
         <div class="result-metrics">
           <div class="metric-gauge-val" style="color: ${item.verdict_color};">${item.risk_percent}%</div>
@@ -220,7 +227,7 @@ function renderResults(data) {
       </div>
 
       <div class="url-details-row">
-        <span>Hostname: <strong>${item.details.host || 'N/A'}</strong></span>
+        <span>Hostname: <strong>${escapeHtml(item.details.host || 'N/A')}</strong></span>
         <span>Độ dài: <strong>${item.details.length}</strong> ký tự</span>
         <span>Entropy: <strong>${item.details.entropy}</strong></span>
         ${suspiciousTag}
@@ -291,7 +298,7 @@ function handleFileSelected(file) {
   const sizeStr = file.size < 1024 * 1024
     ? `${(file.size / 1024).toFixed(1)} KB`
     : `${(file.size / (1024 * 1024)).toFixed(2)} MB`;
-  dropZone.querySelector('p').innerHTML = `Đã chọn: <strong>${file.name}</strong> (${sizeStr})`;
+  dropZone.querySelector('p').textContent = `Đã chọn: ${file.name} (${sizeStr})`;
   btnUpload.disabled = false;
 }
 
@@ -347,22 +354,22 @@ document.getElementById('form-import-dataset').addEventListener('submit', async 
       const d = data.dataset;
       let distRows = '';
       for (const [k, v] of Object.entries(d.class_distribution)) {
-        distRows += `<li>${k}: <strong>${v.toLocaleString()}</strong></li>`;
+        distRows += `<li>${escapeHtml(k)}: <strong>${v.toLocaleString()}</strong></li>`;
       }
       resultBox.innerHTML = `
         <div class="card" style="margin-top: 14px;">
-          <h4>Đã đọc thành công: ${d.file_name} (${d.file_size_mb} MB)</h4>
-          <p class="muted">Cột nhãn nhận diện: <strong>${d.label_column}</strong> · Số dòng đọc mẫu: <strong>${d.sample_rows.toLocaleString()}</strong></p>
+          <h4>Đã đọc thành công: ${escapeHtml(d.file_name)} (${Number(d.file_size_mb)} MB)</h4>
+          <p class="muted">Cột nhãn nhận diện: <strong>${escapeHtml(d.label_column)}</strong> · Số dòng đọc mẫu: <strong>${Number(d.sample_rows).toLocaleString()}</strong></p>
           <ul style="margin-top: 8px; margin-left: 20px;">
             ${distRows}
           </ul>
         </div>
       `;
     } else {
-      resultBox.innerHTML = `<div class="alert-box" style="background: rgba(239,68,68,0.2); color:#fca5a5;">Lỗi: ${data.error}</div>`;
+      resultBox.innerHTML = `<div class="alert-box" style="background: rgba(239,68,68,0.2); color:#fca5a5;">Lỗi: ${escapeHtml(data.error)}</div>`;
     }
   } catch (err) {
-    resultBox.innerHTML = `<div class="alert-box" style="background: rgba(239,68,68,0.2); color:#fca5a5;">Lỗi: ${err.message}</div>`;
+    resultBox.innerHTML = `<div class="alert-box" style="background: rgba(239,68,68,0.2); color:#fca5a5;">Lỗi: ${escapeHtml(err.message)}</div>`;
   }
 });
 

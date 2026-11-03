@@ -55,6 +55,8 @@ MODELS_DIR = ROOT / "models"
 UPLOADS_DIR = ROOT / "uploads"
 STATIC_DIR = ROOT / "static"
 REPORTS_DIR = ROOT / "reports"
+METRICS_DIR = ROOT.parent / "outputs" / "metrics"
+FIGURES_DIR = ROOT.parent / "outputs" / "figures"
 
 UPLOADS_DIR.mkdir(exist_ok=True)
 
@@ -67,9 +69,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         self.wfile.write(payload)
 
@@ -91,10 +90,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_response(405)
         self.end_headers()
 
     def do_HEAD(self):
@@ -105,7 +101,9 @@ class WebAppHandler(BaseHTTPRequestHandler):
         path = url_parts.path
 
         if path == "/api/status":
-            summary_path = REPORTS_DIR / "multiclass_summary.json"
+            summary_path = METRICS_DIR / "multiclass_summary.json"
+            if not summary_path.is_file():
+                summary_path = REPORTS_DIR / "multiclass_summary.json"
             summary_data = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.is_file() else {}
             self.send_json(200, {
                 "status": "ready",
@@ -114,8 +112,8 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 "class_labels": CLASS_LABELS,
                 "class_colors": CLASS_COLORS,
                 "dataset_summary": {
-                    "total_rows": summary_data.get("total_rows", 30640872),
-                    "classes": summary_data.get("classes", ["benign", "phishing", "malware", "defacement", "malicious"]),
+                    "total_rows": summary_data.get("total_rows", 0),
+                    "classes": summary_data.get("classes", ["benign", "malicious", "phishing", "malware"]),
                     "class_distribution": summary_data.get("class_distribution", {}),
                 }
             })
@@ -129,7 +127,9 @@ class WebAppHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/metrics":
-            summary_path = REPORTS_DIR / "multiclass_summary.json"
+            summary_path = METRICS_DIR / "multiclass_summary.json"
+            if not summary_path.is_file():
+                summary_path = REPORTS_DIR / "multiclass_summary.json"
             if summary_path.is_file():
                 self.send_json(200, json.loads(summary_path.read_text(encoding="utf-8")))
             else:
@@ -137,8 +137,13 @@ class WebAppHandler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/reports/"):
-            rel_name = path.replace("/reports/", "")
-            target_f = REPORTS_DIR / rel_name
+            rel_name = path.removeprefix("/reports/")
+            if Path(rel_name).name != rel_name:
+                self.send_json(404, {"error": "Không tìm thấy file."})
+                return
+            target_f = FIGURES_DIR / rel_name
+            if not target_f.is_file():
+                target_f = REPORTS_DIR / rel_name
             self.send_file_response(target_f)
             return
 
@@ -152,7 +157,10 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.send_file_response(STATIC_DIR / "app.js", "application/javascript; charset=utf-8")
             return
 
-        candidate = STATIC_DIR / path.lstrip("/")
+        candidate = (STATIC_DIR / path.lstrip("/")).resolve()
+        if not candidate.is_relative_to(STATIC_DIR.resolve()):
+            self.send_json(404, {"error": "Không tìm thấy file."})
+            return
         if candidate.is_file():
             self.send_file_response(candidate)
             return
@@ -160,12 +168,23 @@ class WebAppHandler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": f"Đường dẫn không tồn tại: {path}"})
 
     def do_POST(self):
+        origin = self.headers.get("Origin")
+        allowed_origin = os.environ.get("AIC_PUBLIC_ORIGIN", f"http://{self.headers.get('Host')}").rstrip("/")
+        if origin and origin.rstrip("/") != allowed_origin:
+            self.send_json(403, {"error": "Origin không hợp lệ."})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = -1
+        if length < 0 or length > 25 * 1024 * 1024:
+            self.send_json(413, {"error": "Kích thước yêu cầu không hợp lệ."})
+            return
         url_parts = urlsplit(self.path)
         path = url_parts.path
 
         if path == "/api/predict":
             try:
-                length = int(self.headers.get("Content-Length", "0"))
                 body = self.rfile.read(length).decode("utf-8")
                 data = json.loads(body)
                 urls = data.get("urls", [])
@@ -189,7 +208,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
 
         if path == "/api/models/select":
             try:
-                length = int(self.headers.get("Content-Length", "0"))
                 body = self.rfile.read(length).decode("utf-8")
                 data = json.loads(body)
                 model_id = data.get("model_id")
@@ -206,9 +224,11 @@ class WebAppHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/upload_model":
+            if os.environ.get("AIC_ALLOW_MODEL_UPLOAD") != "1":
+                self.send_json(403, {"error": "Nạp mô hình bị tắt. Chỉ bật AIC_ALLOW_MODEL_UPLOAD=1 khi bạn tin cậy tệp mô hình."})
+                return
             content_type = self.headers.get("Content-Type", "")
             try:
-                length = int(self.headers.get("Content-Length", "0"))
                 if "application/json" in content_type:
                     body = self.rfile.read(length).decode("utf-8")
                     req_data = json.loads(body)
@@ -227,7 +247,9 @@ class WebAppHandler(BaseHTTPRequestHandler):
                     elif "file_name" in req_data and "base64_data" in req_data:
                         import base64
                         raw_bytes = base64.b64decode(req_data["base64_data"])
-                        save_p = MODELS_DIR / req_data["file_name"]
+                        save_p = MODELS_DIR / Path(req_data["file_name"]).name
+                        if save_p.exists() or save_p.suffix.lower() != ".joblib":
+                            raise ValueError("Tên file không hợp lệ hoặc đã tồn tại")
                         save_p.write_bytes(raw_bytes)
                         new_key = REGISTRY.register_uploaded_model(save_p, req_data.get("name"))
                         self.send_json(200, {
@@ -254,7 +276,9 @@ class WebAppHandler(BaseHTTPRequestHandler):
                         break
 
                 if file_bytes:
-                    target_dest = MODELS_DIR / uploaded_filename
+                    target_dest = MODELS_DIR / Path(uploaded_filename).name
+                    if target_dest.exists() or target_dest.suffix.lower() != ".joblib":
+                        raise ValueError("Tên file không hợp lệ hoặc đã tồn tại")
                     target_dest.write_bytes(file_bytes)
                     new_key = REGISTRY.register_uploaded_model(target_dest)
                     self.send_json(200, {
@@ -272,7 +296,6 @@ class WebAppHandler(BaseHTTPRequestHandler):
 
         if path == "/api/upload_dataset":
             try:
-                length = int(self.headers.get("Content-Length", "0"))
                 body = self.rfile.read(length).decode("utf-8")
                 req_data = json.loads(body)
                 dataset_path = req_data.get("path")
@@ -282,7 +305,12 @@ class WebAppHandler(BaseHTTPRequestHandler):
 
                 p = Path(dataset_path)
                 if p.suffix.lower() == ".parquet":
-                    df = pd.read_parquet(p)
+                    import pyarrow.parquet as pq
+                    parquet = pq.ParquetFile(p)
+                    batch = next(parquet.iter_batches(batch_size=50000), None)
+                    if batch is None:
+                        raise ValueError("File Parquet không có dòng dữ liệu")
+                    df = batch.to_pandas()
                 else:
                     df = pd.read_csv(p, nrows=50000)
 
@@ -315,7 +343,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "API không tồn tại"})
 
 
-def run_server(host="0.0.0.0", port=8501):
+def run_server(host="127.0.0.1", port=8501):
     server = ThreadingHTTPServer((host, port), WebAppHandler)
     print("=" * 70)
     print(" AIC211 CYBERSECURITY WEB PLATFORM (PHÂN LOẠI URL ĐA LỚP)")
@@ -332,7 +360,7 @@ def run_server(host="0.0.0.0", port=8501):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="0.0.0.0", help="Listen host")
+    parser.add_argument("--host", default="127.0.0.1", help="Listen host")
     parser.add_argument("--port", type=int, default=8501, help="Listen port")
     args = parser.parse_args()
     run_server(args.host, args.port)

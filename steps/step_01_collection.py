@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import io
+import itertools
 import json
 import os
 from pathlib import Path
@@ -103,6 +104,8 @@ def collect_single_file(file_path: Path, out_file: Path, max_samples: Optional[i
     file_path = Path(file_path).resolve()
     if not file_path.exists():
         raise FileNotFoundError(f"Tep dau vao khong ton tai: {file_path}")
+    if file_path == out_file.resolve():
+        raise ValueError("Input va output phai khac nhau")
 
     limit = None if (max_samples is None or max_samples <= 0) else max_samples
     print(f"Doc file: {file_path.name} ({round(file_path.stat().st_size / (1024*1024), 2)} MB)")
@@ -120,8 +123,7 @@ def collect_single_file(file_path: Path, out_file: Path, max_samples: Optional[i
                             fin = io.TextIOWrapper(bfin, encoding="utf-8", errors="ignore")
                             header_line = fin.readline()
                             is_csv = "," in header_line or "\t" in header_line
-                            fin.seek(0)
-                            for line_num, line in enumerate(fin, start=1):
+                            for line_num, line in enumerate(itertools.chain([header_line], fin), start=1):
                                 line_str = line.strip()
                                 if not line_str or (line_num == 1 and is_csv and "http" not in line_str.lower() and "." not in line_str):
                                     continue
@@ -144,8 +146,7 @@ def collect_single_file(file_path: Path, out_file: Path, max_samples: Optional[i
             with open(file_path, "r", encoding="utf-8", errors="ignore") as fin:
                 header_line = fin.readline()
                 is_csv = "," in header_line or "\t" in header_line
-                fin.seek(0)
-                for line_num, line in enumerate(fin, start=1):
+                for line_num, line in enumerate(itertools.chain([header_line], fin), start=1):
                     line_str = line.strip()
                     if not line_str or (line_num == 1 and is_csv and "http" not in line_str.lower() and "." not in line_str):
                         continue
@@ -187,8 +188,7 @@ def collect_from_sources(sources: List[Dict[str, Any]], out_file: Path, max_samp
                             fin = io.TextIOWrapper(bfin, encoding="utf-8", errors="ignore")
                             header_line = fin.readline()
                             is_csv = "," in header_line or "\t" in header_line
-                            fin.seek(0)
-                            for line_num, line in enumerate(fin, start=1):
+                            for line_num, line in enumerate(itertools.chain([header_line], fin), start=1):
                                 line_str = line.strip()
                                 if not line_str or (line_num == 1 and is_csv and "http" not in line_str.lower() and "." not in line_str):
                                     continue
@@ -210,8 +210,7 @@ def collect_from_sources(sources: List[Dict[str, Any]], out_file: Path, max_samp
                     with open(s["path"], "r", encoding="utf-8", errors="ignore") as fin:
                         header_line = fin.readline()
                         is_csv = "," in header_line or "\t" in header_line
-                        fin.seek(0)
-                        for line_num, line in enumerate(fin, start=1):
+                        for line_num, line in enumerate(itertools.chain([header_line], fin), start=1):
                             line_str = line.strip()
                             if not line_str or (line_num == 1 and is_csv and "http" not in line_str.lower() and "." not in line_str):
                                 continue
@@ -229,8 +228,8 @@ def collect_from_sources(sources: List[Dict[str, Any]], out_file: Path, max_samp
                             read_in_src += 1
                             if (read_in_src >= samples_per_src) or (limit and collected_count >= limit):
                                 break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Bo qua nguon %s: %s", s["path"], exc)
 
             if limit and collected_count >= limit:
                 break
@@ -249,6 +248,10 @@ def run_collection(
 
     if target:
         tp = Path(target).expanduser().resolve()
+        if not tp.exists():
+            raise FileNotFoundError(f"Khong tim thay nguon du lieu: {tp}")
+        if out_file.resolve() == tp:
+            raise ValueError("Input va output phai khac nhau")
         if tp.is_file():
             collect_single_file(tp, out_file, max_samples=sample_size)
             return out_file

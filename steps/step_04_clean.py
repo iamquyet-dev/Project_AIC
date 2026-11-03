@@ -6,6 +6,8 @@ import logging
 import os
 from pathlib import Path
 import re
+import sqlite3
+import tempfile
 import sys
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -59,82 +61,70 @@ def run_clean(
     in_path = Path(input_file) if input_file else DATA_PROCESSED_DIR / "02_normalized.csv"
     out_path = Path(output_file) if output_file else DATA_PROCESSED_DIR / "03_cleaned.csv"
     rej_path = Path(rejected_file) if rejected_file else DATA_PROCESSED_DIR / "03_rejected.csv"
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
+    if len({in_path.resolve(), out_path.resolve(), rej_path.resolve()}) != 3:
+        raise ValueError("Input, output va rejected phai la ba tep khac nhau")
+    if max_samples is not None and max_samples <= 0:
+        raise ValueError("So dong mau phai duong")
     if not in_path.exists():
         raise FileNotFoundError(f"Khong tim thay tep dau vao: {in_path}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    rej_path.parent.mkdir(parents=True, exist_ok=True)
 
-    file_size = in_path.stat().st_size
-    t0 = time.time()
-    seen_hashes: Set[int] = set()
-    dropped_null = 0
-    dropped_invalid = 0
-    dropped_duplicates = 0
-    cleaned_count = 0
-    total_processed = 0
-
-    header_line = "_aic211_source_row,url,label,timestamp_utc,channel,source,_aic211_ipv4\n"
-    rej_header_line = "_aic211_source_row,url,label,timestamp_utc,channel,source,_aic211_ipv4,_aic211_reject_reason\n"
-
-    print(f"Lam sach: {in_path.name} ({round(file_size / (1024*1024), 2)} MB)", flush=True)
-
-    with open(out_path, "w", encoding="utf-8", newline="", buffering=16*1024*1024) as fout, \
-         open(rej_path, "w", encoding="utf-8", newline="", buffering=4*1024*1024) as frej, \
-         open(in_path, "r", encoding="utf-8-sig", errors="ignore", buffering=16*1024*1024) as fin:
-
-        fout.write(header_line)
-        frej.write(rej_header_line)
-
-        header_str = fin.readline()
-        for line in fin:
-            if not line:
-                continue
-            total_processed += 1
-            line_clean = line.rstrip("\r\n")
-
-            parts = [p.strip().strip('"') for p in line_clean.split(",")]
-            if len(parts) < 3:
-                dropped_invalid += 1
-                frej.write(f"{line_clean},malformed_csv_row\n")
-                continue
-
-            url = parts[1]
-            label = parts[2]
-            label_lower = label.lower()
-
-            if not url or label_lower in MISSING_TOKENS:
-                dropped_null += 1
-                frej.write(f"{line_clean},missing_url_or_label\n")
-                continue
-
-            if not is_valid_url(url):
-                dropped_invalid += 1
-                frej.write(f"{line_clean},invalid_url_format\n")
-                continue
-
-            h_val = hash((url, label_lower))
-            if h_val in seen_hashes:
-                dropped_duplicates += 1
-                frej.write(f"{line_clean},duplicate_url_label_pair\n")
-                continue
-            seen_hashes.add(h_val)
-
-            fout.write(line)
-            cleaned_count += 1
-
-            if total_processed % 2000000 == 0:
-                elapsed = round(time.time() - t0, 1)
-                speed = int(total_processed / max(elapsed, 0.1))
-                print(f"  -> Da xu ly: {total_processed:,} dong ({speed:,} dong/s) [Hop le: {cleaned_count:,}]...", flush=True)
-
-            if max_samples and cleaned_count >= max_samples:
-                break
-
-    elapsed_total = round(time.time() - t0, 2)
-    avg_speed = int(total_processed / max(elapsed_total, 0.1))
+    started = time.time()
+    counts = {"processed": 0, "cleaned": 0, "missing": 0, "invalid": 0, "duplicate": 0}
+    with tempfile.TemporaryDirectory(prefix=".clean_index_", dir=out_path.parent) as scratch:
+        db = sqlite3.connect(Path(scratch) / "seen.sqlite")
+        try:
+            db.execute("PRAGMA journal_mode=OFF")
+            db.execute("PRAGMA synchronous=OFF")
+            db.execute("CREATE TABLE seen (url TEXT PRIMARY KEY) WITHOUT ROWID")
+            with open(in_path, "r", encoding="utf-8-sig", newline="", buffering=16*1024*1024) as fin, \
+                 open(out_path, "w", encoding="utf-8", newline="", buffering=16*1024*1024) as fout, \
+                 open(rej_path, "w", encoding="utf-8", newline="", buffering=4*1024*1024) as frej:
+                reader = csv.DictReader(fin)
+                if not reader.fieldnames or not {"url", "label"}.issubset(reader.fieldnames):
+                    raise ValueError("CSV Clean can cot url va label")
+                fields = list(reader.fieldnames)
+                accepted = csv.DictWriter(fout, fieldnames=fields)
+                rejected = csv.DictWriter(frej, fieldnames=[*fields, "_aic211_reject_reason"])
+                accepted.writeheader()
+                rejected.writeheader()
+                for row in reader:
+                    counts["processed"] += 1
+                    if None in row:
+                        reason = "malformed_csv_row"
+                        row.pop(None)
+                    else:
+                        url = (row.get("url") or "").strip()
+                        label = (row.get("label") or "").strip().lower()
+                        if not url or label in MISSING_TOKENS:
+                            reason = "missing_url_or_label"
+                            counts["missing"] += 1
+                        elif not is_valid_url(url):
+                            reason = "invalid_url_format"
+                            counts["invalid"] += 1
+                        elif not db.execute("INSERT OR IGNORE INTO seen(url) VALUES (?)", (url,)).rowcount:
+                            reason = "duplicate_url"
+                            counts["duplicate"] += 1
+                        else:
+                            reason = ""
+                    if reason:
+                        rejected.writerow({**row, "_aic211_reject_reason": reason})
+                    else:
+                        accepted.writerow(row)
+                        counts["cleaned"] += 1
+                    if counts["processed"] % 50000 == 0:
+                        db.commit()
+                    if max_samples and counts["cleaned"] >= max_samples:
+                        break
+            db.commit()
+        finally:
+            db.close()
+    elapsed = round(time.time() - started, 2)
     logger.info(
-        f"Hoan thanh Buoc 04 -> Da lam sach {cleaned_count:,} ban ghi trong {elapsed_total}s ({avg_speed:,} dong/s) vao {out_path.name}"
+        "Hoan thanh Buoc 04 -> %s dong hop le, %s trung URL, %s thieu, %s sai URL trong %ss: %s",
+        f"{counts['cleaned']:,}", f"{counts['duplicate']:,}", f"{counts['missing']:,}",
+        f"{counts['invalid']:,}", elapsed, out_path.name,
     )
     return out_path
 

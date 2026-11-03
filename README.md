@@ -88,23 +88,20 @@ Project_AIC/
 │   │   └── model_lexical_logistic.joblib    # 3. Logistic Regression Lexical (11 đặc trưng cấu trúc)
 │   │
 │   ├── 📁 figures/                          # Biểu đồ Ma trận nhầm lẫn (Confusion Matrix Heatmap)
-│   │   ├── cm_word_char_svm.png             # Biểu đồ ma trận 4x4 mô hình SVM
-│   │   ├── cm_word_tfidf_logistic.png       # Biểu đồ ma trận 4x4 mô hình Logistic TF-IDF
-│   │   ├── cm_lexical_logistic.png          # Biểu đồ ma trận 4x4 mô hình Lexical
-│   │   └── 📁 YYYY-MM-DD/                   # Thư mục lưu trữ lịch sử biểu đồ theo từng ngày chạy
+│   │   ├── cm_svm.png                       # Biểu đồ ma trận 4x4 mô hình SVM
+│   │   ├── cm_logistic_tfidf.png            # Biểu đồ ma trận 4x4 mô hình Logistic TF-IDF
+│   │   ├── cm_logistic_lexical.png          # Biểu đồ ma trận 4x4 mô hình Lexical
 │   │
 │   ├── 📁 metrics/                          # File báo cáo số liệu chi tiết
 │   │   ├── multiclass_summary.json          # Toàn bộ thông số F1, Precision, Recall từng lớp của 3 mô hình
-│   │   └── 📁 YYYY-MM-DD/                   # Thư mục lưu trữ lịch sử JSON theo từng ngày chạy
 │   │
 │   └── 📁 tables/                           # Bảng so sánh hiệu năng tổng hợp
 │       ├── models_comparison.csv            # Bảng so sánh định dạng bảng tính CSV
 │       ├── models_comparison.md             # Bảng so sánh định dạng văn bản Markdown
-│       └── 📁 YYYY-MM-DD/                   # Thư mục lưu trữ bảng so sánh theo từng ngày chạy
 │
 ├── 📂 web/                                  # [ỨNG DỤNG WEB THỰC TẾ] - Giao diện phân tích URL trực quan
 │   ├── 📁 models/                           # Chứa các mô hình máy học phục vụ suy luận trực tiếp cho web
-│   ├── 📁 reports/                          # Chứa biểu đồ ma trận và báo cáo thống kê hiển thị lên giao diện
+│   ├── 📁 reports/                          # Báo cáo cũ; web ưu tiên đọc outputs/metrics và outputs/figures
 │   ├── 📁 static/                           # Giao diện người dùng (Frontend)
 │   │   ├── index.html                       # Trang web trung tâm SOC: nhập URL, xem tỷ lệ %, tra cứu kết quả
 │   │   ├── styles.css                       # Giao diện Dark Mode hiện đại, tối ưu hiển thị trên di động & máy tính
@@ -137,13 +134,15 @@ Project_AIC/
 
 ## 4. Bảng Đánh Giá Hiệu Năng 3 Mô Hình Huấn Luyện
 
-Kết quả kiểm thử thực tế trên **6.484.817 mẫu URL** (tập `test.csv` hoàn toàn mới, độc lập 100% với tập train):
+**Kết quả lịch sử từ mã và dữ liệu cũ** trên 6.484.817 URL. Cách chia tập cũ theo từng dòng có thể để URL trùng hoặc gần trùng lọt vào cả train và test; chưa thể khẳng định các số liệu dưới đây là ước lượng độc lập. Sau khi tạo lại dữ liệu, huấn luyện và đánh giá, cần cập nhật bảng này:
 
 | Mô hình | Đặc trưng trích xuất | Accuracy | Precision | Recall | F1-Score | Tốc độ quét | Độ trễ suy luận | Dung lượng file |
 |---|---|---|---|---|---|---|---|---|
 | **Linear SVM** | Word + Char n-grams (3-5 ký tự) | **80.61%** | **80.94%** | **80.61%** | **80.65%** | 6.052 URL/s | 0.1652 ms | 2.67 MB |
 | **Logistic Regression** | Word TF-IDF | **75.89%** | **76.28%** | **75.89%** | **75.83%** | **44.416 URL/s** | **0.0225 ms** | 1.89 MB |
 | **Logistic Regression** | 11 đặc trưng cấu trúc (Lexical) | **59.08%** | **59.99%** | **59.08%** | **59.41%** | 17.746 URL/s | 0.0564 ms | 1.6 KB |
+
+Có thể kiểm tra khác biệt scheme, path, độ dài URL và nguồn theo lớp bằng lệnh `python steps/diagnose_bias.py data/processed/train.csv --max-rows 10000`. Kết quả từ 10.000 dòng đầu chỉ là chẩn đoán mẫu, không đại diện toàn bộ dữ liệu.
 
 ### Đánh giá chất lượng nhận diện (Mô hình Linear SVM):
 - **Benign (An toàn)**: Đạt F1-Score **87.6%** (Độ chính xác 86.0%, độ phủ 89.2% trên 3.423.772 link).
@@ -174,8 +173,8 @@ python step_07_train.py
 cd steps
 python step_08_evaluate.py
 ```
-- Tự động kiểm thử mô hình trên tập `test.csv` (hoặc `val.csv`).
-- Tự động vẽ và lưu biểu đồ ma trận nhầm lẫn (`cm_*.png`) vào `outputs/figures/` và thư mục lưu trữ theo ngày (`outputs/figures/YYYY-MM-DD/`).
+- Mặc định chỉ kiểm thử trên `test.csv`; muốn dùng `val.csv` cần chọn rõ trong menu hoặc truyền `--input`.
+- Mỗi mô hình lưu một biểu đồ `cm_*.png` vào `outputs/figures/`. Đặt `AIC_SAVE_LEGACY_CM=1` nếu cần thêm tên file cũ; đặt `AIC_EXTRA_REPORT_DIRS` nếu cần chép báo cáo sang thư mục khác.
 
 ### 4. Khởi động Web phân tích URL
 - **Cách 1 (Nhanh nhất trên Windows)**: Vào thư mục `web` và bấm đúp chuột vào file `CHAY_WEB.cmd`.
@@ -184,4 +183,4 @@ python step_08_evaluate.py
   cd web
   python app.py --port 8501
   ```
-- Mở trình duyệt và truy cập: `http://localhost:8501` (hoặc domain VPS `http://aic.t1m.tech`).
+- Mở trình duyệt và truy cập `http://localhost:8501`. Mặc định web chỉ lắng nghe tại `127.0.0.1`; triển khai trên máy chủ cần cấu hình `--host`, `AIC_PUBLIC_ORIGIN` nếu dùng HTTPS/reverse proxy và biện pháp bảo vệ phù hợp. Tính năng nạp file mô hình `joblib` chỉ hoạt động khi đặt `AIC_ALLOW_MODEL_UPLOAD=1` và chỉ nên dùng với file tin cậy.

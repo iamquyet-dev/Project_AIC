@@ -63,45 +63,31 @@ def _normalize_slice(args: Tuple[str, int, int, str, str]) -> int:
     with open(in_file, "rb") as fin, open(part_out, "w", encoding="utf-8", newline="", buffering=8*1024*1024) as fout:
         writer = csv.writer(fout)
         if start_pos > 0:
-            fin.seek(start_pos)
-            skip_b = fin.readline()
-            cur_pos = start_pos + len(skip_b)
+            fin.seek(start_pos - 1)
+            if fin.read(1) != b"\n":
+                fin.readline()
         else:
-            fin.seek(0)
-            cur_pos = 0
+            fin.readline()  # Skip the header once.
 
-        while cur_pos < end_pos:
-            raw_b = fin.readline()
-            if not raw_b:
+        while fin.tell() < end_pos:
+            row_start = fin.tell()
+            raw = fin.readline()
+            if not raw:
                 break
-            cur_pos += len(raw_b)
-
-            try:
-                line_str = raw_b.decode("utf-8", errors="ignore").strip()
-                if not line_str:
-                    continue
-                parts = [p.strip().strip('"') for p in line_str.split('","')]
-                if len(parts) < 4:
-                    continue
-                if cur_pos - len(raw_b) == 0 and "url_raw" in line_str:
-                    continue
-
-                u_raw = parts[0].lstrip('"')
-                lbl_raw = parts[1]
-                u_clean = parts[2]
-                lbl_clean = parts[3]
-                ipv4 = parts[4] if len(parts) > 4 else ""
-                channel = parts[5] if len(parts) > 5 else "agent"
-                source = parts[6].rstrip('"') if len(parts) > 6 else "raw"
-
-                u_norm = (u_clean or u_raw).strip()
-                lbl_norm = LABEL_MAPPING.get(lbl_clean.lower().strip(), lbl_clean.lower().strip())
-
-                writer.writerow([count + 1, u_norm, lbl_norm, ts_now, channel, source, ipv4])
-                count += 1
-            except Exception:
+            if not raw.strip():
                 continue
-
+            fields = next(csv.reader([raw.decode("utf-8").rstrip("\r\n")]))
+            if len(fields) < 4:
+                raise ValueError(f"Malformed parsed CSV row at byte {row_start}: {in_file}")
+            url_raw, label_raw, url, label = fields[:4]
+            ipv4 = fields[4] if len(fields) > 4 else ""
+            channel = fields[5] if len(fields) > 5 else "agent"
+            origin = fields[6] if len(fields) > 6 else "raw"
+            normalized_url = (url or url_raw).strip()
+            normalized_label = label.strip().lower()
+            normalized_label = LABEL_MAPPING.get(normalized_label, normalized_label)
+            writer.writerow([row_start, normalized_url, normalized_label, ts_now, channel, origin, ipv4])
+            count += 1
     return count
 
 def run_normalize(
@@ -112,6 +98,12 @@ def run_normalize(
 ) -> Path:
     in_path = Path(input_file) if input_file else DATA_PROCESSED_DIR / "01_parsed.csv"
     out_path = Path(output_file) if output_file else DATA_PROCESSED_DIR / "02_normalized.csv"
+    if in_path.resolve() == out_path.resolve():
+        raise ValueError("Input va output phai khac nhau")
+    if max_samples is not None and max_samples <= 0:
+        raise ValueError("So dong mau phai duong")
+    if workers is not None and workers <= 0:
+        raise ValueError("So tien trinh phai duong")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not in_path.exists():
@@ -125,7 +117,7 @@ def run_normalize(
 
     print(f"Chuan hoa: {in_path.name} ({round(file_size / (1024*1024), 2)} MB) - {num_workers} tien trinh", flush=True)
 
-    if max_samples and max_samples < 500000:
+    if max_samples is not None:
         count = 0
         with open(out_path, "w", encoding="utf-8", newline="") as fout, open(in_path, "r", encoding="utf-8-sig", errors="ignore") as fin:
             writer = csv.writer(fout)
@@ -147,7 +139,7 @@ def run_normalize(
     temp_dir = out_path.parent / "_temp_normalizing"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    chunk_bytes = file_size // num_workers
+    chunk_bytes = max(1, file_size // num_workers)
     tasks = []
     part_files = []
 

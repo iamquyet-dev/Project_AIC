@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import logging
+import math
 import multiprocessing as mp
 import os
 from pathlib import Path
@@ -230,8 +231,11 @@ def _parse_single_source_worker(args: Tuple[Dict[str, Any], str, Optional[int]])
             else:
                 with open(f_path, "r", encoding="utf-8", errors="ignore") as fin:
                     count = _process_stream(fin, fout, source_name, channel, limit)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Bo qua nguon %s%s: %s", f_path, f"::{inner_file}" if inner_file else "", exc)
+            fout.seek(0)
+            fout.truncate()
+            count = 0
 
     return count
 
@@ -366,68 +370,50 @@ def _process_excel(f_path: Path, fout, source_name: str, channel: str, limit: Op
     return count
 
 def _process_stream(fin, fout, source_name: str, channel: str, limit: Optional[int]) -> int:
-    count = 0
+    import itertools
+
     first_line = fin.readline()
     if not first_line:
         return 0
-
     first_clean = first_line.strip()
     is_json = first_clean.startswith("{") and first_clean.endswith("}")
-    is_csv = ("," in first_clean or "\t" in first_clean) and not first_clean.startswith("http") and not is_json
-
-    url_idx = 0
-    label_idx = -1
     sep = "\t" if "\t" in first_clean and "," not in first_clean else ","
+    first_fields = next(csv.reader([first_line], delimiter=sep), []) if not is_json else []
+    names = [field.strip().lower().lstrip("\ufeff") for field in first_fields]
+    url_names = {"url", "urls", "domain", "domain_name", "link", "webpage", "website", "site", "host"}
+    label_names = {"label", "class", "classlabel", "target", "result", "status", "type", "is_phishing"}
+    has_header = any(name in url_names for name in names)
+    url_idx = next((i for i, name in enumerate(names) if name in url_names), 0)
+    label_idx = next((i for i, name in enumerate(names) if name in label_names and i != url_idx), -1)
+    writer = csv.writer(fout)
+    count = 0
 
-    if is_csv:
-        header_parts = [h.strip().strip('"').lower() for h in first_clean.split(sep)]
-        for i, h in enumerate(header_parts):
-            if any(k in h for k in ("url", "domain", "link", "webpage", "site", "host")):
-                url_idx = i
-                break
-        for i, h in enumerate(header_parts):
-            if i != url_idx and any(k in h for k in ("label", "class", "target", "result", "status", "type", "is_phishing")):
-                label_idx = i
+    if has_header:
+        records = csv.reader(fin, delimiter=sep)
+        for fields in records:
+            if len(fields) <= url_idx:
+                continue
+            u = fields[url_idx].strip()
+            if len(u) < 3 or any(c in u for c in "\r\n"):
+                continue
+            raw_lbl = fields[label_idx] if 0 <= label_idx < len(fields) else ""
+            lbl = _map_label(raw_lbl, source_name)
+            match = IP_RE.search(u)
+            writer.writerow([u, lbl, u, lbl, match.group(0) if match else "", channel, source_name])
+            count += 1
+            if limit and count >= limit:
                 break
     else:
-        u, lbl, ip = _parse_line_general(first_clean, source_name)
-        if u:
-            clean_u = u.replace('"', '""')
-            clean_lbl = lbl.replace('"', '""')
-            fout.write(f'"{clean_u}","{clean_lbl}","{clean_u}","{clean_lbl}","{ip}","{channel}","{source_name}"\n')
+        for line in itertools.chain([first_line], fin):
+            if not line.strip():
+                continue
+            u, lbl, ip = _parse_line_general(line, source_name)
+            if len(u) < 3 or any(c in u for c in "\r\n"):
+                continue
+            writer.writerow([u, lbl, u, lbl, ip, channel, source_name])
             count += 1
-
-    for line in fin:
-        line_str = line.strip()
-        if not line_str:
-            continue
-
-        if is_csv:
-            parts = line_str.split(sep)
-            if len(parts) <= url_idx:
-                continue
-            u = parts[url_idx].strip().strip('"').strip("'")
-            if not u or len(u) < 3:
-                continue
-
-            raw_lbl = parts[label_idx].strip().strip('"').lower() if (label_idx >= 0 and label_idx < len(parts)) else ""
-            lbl = _map_label(raw_lbl, source_name)
-            m = IP_RE.search(u)
-            ip = m.group(0) if m else ""
-        else:
-            u, lbl, ip = _parse_line_general(line_str, source_name)
-
-        if not u:
-            continue
-
-        clean_u = u.replace('"', '""')
-        clean_lbl = lbl.replace('"', '""')
-        fout.write(f'"{clean_u}","{clean_lbl}","{clean_u}","{clean_lbl}","{ip}","{channel}","{source_name}"\n')
-        count += 1
-
-        if limit and count >= limit:
-            break
-
+            if limit and count >= limit:
+                break
     return count
 
 def _parse_line_general(line_str: str, source_name: str) -> Tuple[str, str, str]:
@@ -447,8 +433,21 @@ def _parse_line_general(line_str: str, source_name: str) -> Tuple[str, str, str]
 
     if not u:
         if "," in p:
-            parts = [part.strip().strip('"').strip("'") for part in p.split(",")]
+            parts = next(csv.reader([p]), [])
+            known_labels = {"0", "0.0", "1", "1.0", "benign", "safe", "ham", "good", "legitimate", "bad", "malicious", "mal", "phishing", "phish", "malware", "trojan", "virus", "defacement", "defaced", "deface"}
+            if len(parts) >= 2 and parts[-1].strip().lower() in known_labels:
+                u = ",".join(parts[:-1]).strip()
+                lbl_raw = parts[-1]
+            elif p.startswith(("http://", "https://", "HTTP://", "HTTPS://")):
+                u = p
+            elif parts and "." in parts[0] and ("/" in parts[0] or len(parts) == 2):
+                u = p
+            elif len(parts) == 1:
+                u = parts[0].strip()
+            parts = [part.strip().strip("'") for part in parts]
             for part in parts:
+                if u:
+                    break
                 if part.startswith(("http://", "https://", "HTTP://", "HTTPS://")) or ("." in part and "/" in part and " " not in part):
                     u = part
                     break
@@ -473,8 +472,12 @@ def run_parsing(
     workers: Optional[int] = None,
     max_samples: Optional[int] = None,
 ) -> Path:
+    if max_samples is not None and max_samples <= 0:
+        raise ValueError("So dong mau phai duong")
     target = Path(input_path) if input_path else DATA_RAW_DIR
     out_path = Path(output_file) if output_file else DATA_PROCESSED_DIR / "01_parsed.csv"
+    if target.is_file() and target.resolve() == out_path.resolve():
+        raise ValueError("Input va output phai khac nhau")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
@@ -503,7 +506,7 @@ def run_parsing(
     temp_dir = out_path.parent / "_temp_parsing"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    limit_per_src = (max_samples // max(1, len(sources))) if max_samples else None
+    limit_per_src = max(1, math.ceil(max_samples / len(sources))) if max_samples is not None else None
     tasks = []
     part_files = []
 
@@ -520,16 +523,24 @@ def run_parsing(
     speed_proc = int(total_parsed / max(t_process, 0.1))
     print(f"Xong phan tich {len(sources)} nguon: {total_parsed:,} dong trong {t_process}s ({speed_proc:,} dong/s)", flush=True)
 
-    with open(out_path, "wb") as fout:
-        fout.write(b'"url_raw","label_raw","url","label","_aic211_ipv4","channel","source"\n')
+    with open(out_path, "w", encoding="utf-8", newline="") as fout:
+        writer = csv.writer(fout)
+        writer.writerow(["url_raw", "label_raw", "url", "label", "_aic211_ipv4", "channel", "source"])
+        total_written = 0
         for pf in part_files:
             if pf.exists():
-                with open(pf, "rb") as pfin:
-                    shutil.copyfileobj(pfin, fout, length=16 * 1024 * 1024)
-                try:
-                    pf.unlink()
-                except Exception:
-                    pass
+                with open(pf, "r", encoding="utf-8", newline="") as pfin:
+                    if max_samples is None:
+                        shutil.copyfileobj(pfin, fout, length=16 * 1024 * 1024)
+                    else:
+                        for row in csv.reader(pfin):
+                            if total_written >= max_samples:
+                                break
+                            writer.writerow(row)
+                            total_written += 1
+                pf.unlink()
+    if max_samples is not None:
+        total_parsed = total_written
 
     try:
         temp_dir.rmdir()

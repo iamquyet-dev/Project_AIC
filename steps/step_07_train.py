@@ -72,6 +72,8 @@ def build_pipeline(model_key: str) -> Pipeline:
         raise ValueError(f"Khong ro cau hinh mo hinh: {model_key}")
 
 def load_training_data(file_path: Path, max_samples: Optional[int] = None) -> Tuple[List[str], List[str]]:
+    if max_samples is not None and max_samples <= 0:
+        raise ValueError("So mau phai duong")
     urls: List[str] = []
     labels: List[str] = []
 
@@ -81,14 +83,17 @@ def load_training_data(file_path: Path, max_samples: Optional[int] = None) -> Tu
         if not header:
             raise ValueError(f"Tep {file_path} khong co du lieu.")
 
-        url_idx = 1
-        label_idx = 2
+        url_idx = None
+        label_idx = None
         for idx, col in enumerate(header):
             c_low = col.strip().lower()
             if c_low in ("url", "urls", "domain"):
                 url_idx = idx
             elif c_low in ("label", "class", "target"):
                 label_idx = idx
+
+        if url_idx is None or label_idx is None:
+            raise ValueError("CSV train can cot URL va label ro rang")
 
         for i, row in enumerate(reader):
             if max_samples and i >= max_samples:
@@ -134,8 +139,10 @@ def train_single_model(
         scaler_step = pipe.named_steps.get("scaler")
 
         unique_classes = np.arange(len(CLASSES))
-        cw = compute_class_weight("balanced", classes=unique_classes, y=y_indices)
-        cw_dict = {int(c): float(w) for c, w in zip(unique_classes, cw)}
+        present = np.unique(y_indices)
+        cw = compute_class_weight("balanced", classes=present, y=y_indices)
+        cw_dict = {int(c): 1.0 for c in unique_classes}
+        cw_dict.update({int(c): float(w) for c, w in zip(present, cw)})
         clf_step.set_params(class_weight=cw_dict)
 
         print("  -> Trich xuat dac trung...")
@@ -242,12 +249,6 @@ def run_train(
 ) -> List[Path]:
     in_path = Path(input_file) if input_file else (DATA_PROCESSED_DIR / "train.csv")
     if not in_path.exists():
-        for cand in [DATA_PROCESSED_DIR / "04_features.csv", DATA_PROCESSED_DIR / "03_cleaned.csv"]:
-            if cand.exists():
-                in_path = cand
-                break
-
-    if not in_path.exists():
         raise FileNotFoundError(f"Khong tim thay tap du lieu train: {in_path}. Vui long chay Buoc 06 truoc.")
 
     out_d = Path(output_dir) if output_dir else MODELS_DIR
@@ -257,6 +258,8 @@ def run_train(
     s_label = f"{samples:,}" if samples else "toan bo"
     print(f"Nap du lieu train tu {in_path.name} (toi da: {s_label})...")
     urls, labels = load_training_data(in_path, max_samples=samples)
+    if not urls:
+        raise ValueError("Tap train khong co mau hop le")
     print(f"Da nap {len(urls):,} mau URL hop le thuoc {len(set(labels))} lop.")
 
     dist = {}
@@ -287,7 +290,7 @@ def run_train(
     logger.info(f"Hoan thanh Buoc 07 -> Huan luyen xong {len(saved_paths)} mo hinh trong {total_sec}s")
     return saved_paths
 
-def prompt_menu_input() -> Tuple[Optional[str], Optional[str], str, Optional[int], bool]:
+def prompt_menu_input(ask_model: bool = True) -> Tuple[Optional[str], Optional[str], str, Optional[int], bool]:
     default_in = str(DATA_PROCESSED_DIR / "train.csv")
     default_out = str(MODELS_DIR)
 
@@ -300,13 +303,15 @@ def prompt_menu_input() -> Tuple[Optional[str], Optional[str], str, Optional[int
     choice_inc = input("Chon [1-2, Enter=1]: ").strip()
     is_inc = (choice_inc == "2")
 
-    print("1. Huan luyen toan bo ca 3 mo hinh (Mac dinh)")
-    print("2. Chi huan luyen Logistic Regression TF-IDF")
-    print("3. Chi huan luyen Linear SVM (Word + Char n-grams)")
-    print("4. Chi huan luyen Logistic Regression Lexical (11 dac trung co ban)")
-    choice_m = input("Chon [1-4, Enter=1]: ").strip()
-    models_map = {"1": "all", "2": "logistic_tfidf", "3": "svm", "4": "logistic_lexical"}
-    target_model = models_map.get(choice_m, "all")
+    target_model = "all"
+    if ask_model:
+        print("1. Huan luyen toan bo ca 3 mo hinh (Mac dinh)")
+        print("2. Chi huan luyen Logistic Regression TF-IDF")
+        print("3. Chi huan luyen Linear SVM (Word + Char n-grams)")
+        print("4. Chi huan luyen Logistic Regression Lexical (11 dac trung co ban)")
+        choice_m = input("Chon [1-4, Enter=1]: ").strip()
+        models_map = {"1": "all", "2": "logistic_tfidf", "3": "svm", "4": "logistic_lexical"}
+        target_model = models_map.get(choice_m, "all")
 
     print("1. 100,000 dong (Kiem thu nhanh)")
     print("2. 500,000 dong (Can bang)")

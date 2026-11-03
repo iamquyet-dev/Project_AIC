@@ -38,7 +38,7 @@ def main_interactive():
         run_train(input_file=in_f, output_dir=out_d, model_choice=mdl, samples=smp, is_incremental=inc)
     else:
         from steps.step_07_train import prompt_menu_input as p_train
-        in_f, out_d, _, smp, inc = p_train()
+        in_f, out_d, _, smp, inc = p_train(ask_model=False)
         run_train(input_file=in_f, output_dir=out_d, model_choice="all", samples=smp, is_incremental=inc)
 
 if __name__ == "__main__":

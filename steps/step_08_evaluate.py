@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import datetime, timezone
 import json
 import logging
+import math
 import os
 from pathlib import Path
-import shutil
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -40,6 +41,20 @@ MODEL_FILE_ALIASES = {
     "logistic_tfidf": ["cm_logistic_tfidf.png", "cm_word_tfidf_logistic.png"],
     "logistic_lexical": ["cm_logistic_lexical.png", "cm_lexical_logistic.png"],
 }
+
+def extra_report_dirs() -> List[Path]:
+    return [Path(item.strip()) for item in os.environ.get("AIC_EXTRA_REPORT_DIRS", "").split(os.pathsep) if item.strip()]
+
+
+def wilson_interval(successes: int, total: int) -> List[float]:
+    if total <= 0:
+        return [0.0, 0.0]
+    z = 1.959963984540054
+    p = successes / total
+    den = 1 + z*z / total
+    center = (p + z*z / (2*total)) / den
+    half = z * math.sqrt(p*(1-p)/total + z*z/(4*total*total)) / den
+    return [max(0.0, center-half), min(1.0, center+half)]
 
 def save_confusion_matrix_plot(model_key: str, metrics: Dict[str, Any]) -> None:
     cm_list = metrics.get("confusion_matrix")
@@ -81,23 +96,14 @@ def save_confusion_matrix_plot(model_key: str, metrics: Dict[str, Any]) -> None:
         fig.tight_layout()
 
         aliases = MODEL_FILE_ALIASES.get(model_key, [f"cm_{model_key}.png"])
-        date_folder = time.strftime("%Y-%m-%d")
-        dest_dirs = [
-            FIGURES_DIR,
-            FIGURES_DIR / date_folder,
-            PROJECT_ROOT / "web" / "reports",
-            PROJECT_ROOT / "web" / "reports" / date_folder,
-            Path("E:/AIC211_web/reports"),
-        ]
-
-        for d in dest_dirs:
-            if d.exists() or d.parent.exists():
-                d.mkdir(parents=True, exist_ok=True)
-                for fname in aliases:
-                    fig.savefig(d / fname, dpi=150)
+        names = aliases if os.environ.get("AIC_SAVE_LEGACY_CM") == "1" else aliases[:1]
+        for d in [FIGURES_DIR, *extra_report_dirs()]:
+            d.mkdir(parents=True, exist_ok=True)
+            for fname in names:
+                fig.savefig(d / fname, dpi=150)
 
         plt.close(fig)
-        print(f"  -> Da cap nhat bieu do ma tran: {aliases[-1]} (ghi de va luu vao thu muc {date_folder})")
+        print(f"  -> Da cap nhat bieu do ma tran: {names[0]}")
     except Exception as e:
         print(f"  -> Khong the xuat anh ma tran: {e}")
 
@@ -105,8 +111,7 @@ def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, tot
     if not results:
         return
 
-    now_iso = time.strftime("%Y-%m-%dT%H:%M:%S+07:00")
-    date_folder = time.strftime("%Y-%m-%d")
+    now_iso = datetime.now(timezone.utc).isoformat()
     models_summary = []
     for r in results:
         m_key = r.get("model", "")
@@ -123,6 +128,11 @@ def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, tot
             "latency_ms": r.get("latency_ms", 0.0),
             "per_class": r.get("per_class", {}),
             "confusion_matrix": r.get("confusion_matrix", []),
+            "accuracy_ci95": r.get("accuracy_ci95", []),
+            "threat_detection_rate": r.get("threat_detection_rate", 0.0),
+            "false_benign_alarm_rate": r.get("false_benign_alarm_rate", 0.0),
+            "threat_detection_ci95": r.get("threat_detection_ci95", []),
+            "false_benign_alarm_ci95": r.get("false_benign_alarm_ci95", []),
         })
 
     summary_payload = {
@@ -133,59 +143,41 @@ def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, tot
         "classes": CLASSES,
         "class_distribution": dist,
         "models": models_summary,
-        "plots": {
-            "cm_word_char_svm": "outputs/figures/cm_word_char_svm.png",
-            "cm_word_tfidf_logistic": "outputs/figures/cm_word_tfidf_logistic.png",
-            "cm_lexical_logistic": "outputs/figures/cm_lexical_logistic.png",
-        },
+        "plots": {name: f"outputs/figures/{aliases[0]}" for name, aliases in MODEL_FILE_ALIASES.items()},
     }
 
-    metrics_dirs = [
-        METRICS_DIR,
-        METRICS_DIR / date_folder,
-        PROJECT_ROOT / "web" / "reports",
-        PROJECT_ROOT / "web" / "reports" / date_folder,
-        Path("E:/AIC211_web/reports"),
-    ]
+    metrics_dirs = [METRICS_DIR, *extra_report_dirs()]
     for md in metrics_dirs:
-        if md.exists() or md.parent.exists():
-            md.mkdir(parents=True, exist_ok=True)
-            target_f = md / "multiclass_summary.json"
-            target_f.write_text(json.dumps(summary_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        md.mkdir(parents=True, exist_ok=True)
+        target_f = md / "multiclass_summary.json"
+        target_f.write_text(json.dumps(summary_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    csv_lines = ["Model,Accuracy,Precision_Weighted,Recall_Weighted,Weighted_F1,Macro_Precision,Macro_Recall,Macro_F1,Latency_ms"]
+    csv_lines = ["Model,Accuracy,Accuracy_CI95_Low,Accuracy_CI95_High,Threat_Detection_Rate,False_Benign_Alarm_Rate,Precision_Weighted,Recall_Weighted,Weighted_F1,Macro_Precision,Macro_Recall,Macro_F1,Latency_ms"]
     for r in results:
         m_key = r.get("model", "")
         m_name = MODEL_DISPLAY_NAMES.get(m_key, m_key)
-        csv_lines.append(f'"{m_name}",{r["accuracy"]*100:.2f}%,{r["precision_weighted"]*100:.2f}%,{r["recall_weighted"]*100:.2f}%,{r["weighted_f1"]*100:.2f}%,{r["macro_precision"]*100:.2f}%,{r["macro_recall"]*100:.2f}%,{r["macro_f1"]*100:.2f}%,{r.get("latency_ms", 0):.4f} ms')
+        csv_lines.append(f'"{m_name}",{r["accuracy"]*100:.2f}%,{r["accuracy_ci95"][0]*100:.2f}%,{r["accuracy_ci95"][1]*100:.2f}%,{r["threat_detection_rate"]*100:.2f}%,{r["false_benign_alarm_rate"]*100:.2f}%,{r["precision_weighted"]*100:.2f}%,{r["recall_weighted"]*100:.2f}%,{r["weighted_f1"]*100:.2f}%,{r["macro_precision"]*100:.2f}%,{r["macro_recall"]*100:.2f}%,{r["macro_f1"]*100:.2f}%,{r.get("latency_ms", 0):.4f} ms')
     csv_content = "\n".join(csv_lines)
 
     md_lines = [
         "# Bang So Sanh Hieu Nang Cac Mo Hinh AIC211",
         "",
-        "| Mo hinh | Accuracy | Precision (Weighted) | Recall (Weighted) | Weighted-F1 | Do tre (ms/URL) |",
-        "|---|---|---|---|---|---|",
+        "| Mo hinh | Accuracy (CI 95%) | Phat hien de doa | Bao nham benign | Precision (Weighted) | Recall (Weighted) | Weighted-F1 | Do tre (ms/URL) |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
         m_key = r.get("model", "")
         m_name = MODEL_DISPLAY_NAMES.get(m_key, m_key)
-        md_lines.append(f"| **{m_name}** | {r['accuracy']*100:.2f}% | {r['precision_weighted']*100:.2f}% | {r['recall_weighted']*100:.2f}% | {r['weighted_f1']*100:.2f}% | {r.get('latency_ms', 0):.4f} ms |")
+        md_lines.append(f"| **{m_name}** | {r['accuracy']*100:.2f}% ({r['accuracy_ci95'][0]*100:.2f}–{r['accuracy_ci95'][1]*100:.2f}%) | {r['threat_detection_rate']*100:.2f}% | {r['false_benign_alarm_rate']*100:.2f}% | {r['precision_weighted']*100:.2f}% | {r['recall_weighted']*100:.2f}% | {r['weighted_f1']*100:.2f}% | {r.get('latency_ms', 0):.4f} ms |")
     md_content = "\n".join(md_lines)
 
-    table_dirs = [
-        TABLES_DIR,
-        TABLES_DIR / date_folder,
-        PROJECT_ROOT / "web" / "reports",
-        PROJECT_ROOT / "web" / "reports" / date_folder,
-        Path("E:/AIC211_web/reports"),
-    ]
+    table_dirs = [TABLES_DIR, *extra_report_dirs()]
     for td in table_dirs:
-        if td.exists() or td.parent.exists():
-            td.mkdir(parents=True, exist_ok=True)
-            (td / "models_comparison.csv").write_text(csv_content, encoding="utf-8")
-            (td / "models_comparison.md").write_text(md_content, encoding="utf-8")
+        td.mkdir(parents=True, exist_ok=True)
+        (td / "models_comparison.csv").write_text(csv_content, encoding="utf-8")
+        (td / "models_comparison.md").write_text(md_content, encoding="utf-8")
 
-    print(f"\nDa dong bo bao cao JSON va bang so sanh vao outputs/ (ghi de goc va folder ngay {date_folder})")
+    print("\nDa cap nhat bao cao JSON va bang so sanh trong outputs/")
 
 def load_test_samples(test_path: Path, max_samples: Optional[int] = None) -> Tuple[List[str], List[str]]:
     urls: List[str] = []
@@ -197,14 +189,17 @@ def load_test_samples(test_path: Path, max_samples: Optional[int] = None) -> Tup
         if not header:
             raise ValueError(f"Tep kiem thu {test_path} rong khong co du lieu.")
 
-        url_idx = 1
-        label_idx = 2
+        url_idx = None
+        label_idx = None
         for idx, col in enumerate(header):
             c_low = col.strip().lower()
             if c_low in ("url", "urls", "domain"):
                 url_idx = idx
             elif c_low in ("label", "class", "target"):
                 label_idx = idx
+
+        if url_idx is None or label_idx is None:
+            raise ValueError("CSV test can cot URL va label ro rang")
 
         for i, row in enumerate(reader):
             if max_samples and i >= max_samples:
@@ -235,12 +230,12 @@ def evaluate_single_model(
 
     if total <= batch_size:
         raw_p = pipe.predict(urls)
-        preds = [classes[p] if isinstance(p, (int, np.integer)) and p < len(classes) else str(p) for p in raw_p]
+        preds = [classes[p] if isinstance(p, (int, np.integer)) and 0 <= p < len(classes) else str(p) for p in raw_p]
     else:
         for i in range(0, total, batch_size):
             chunk = urls[i : i + batch_size]
             raw_p = pipe.predict(chunk)
-            chunk_labels = [classes[p] if isinstance(p, (int, np.integer)) and p < len(classes) else str(p) for p in raw_p]
+            chunk_labels = [classes[p] if isinstance(p, (int, np.integer)) and 0 <= p < len(classes) else str(p) for p in raw_p]
             preds.extend(chunk_labels)
             done = min(i + batch_size, total)
             pct = round(done / total * 100, 1)
@@ -251,14 +246,33 @@ def evaluate_single_model(
     speed = int(total / max(total_eval_time, 0.01))
     latency = round((total_eval_time * 1000) / max(total, 1), 4)
 
+    if any(pred not in CLASSES for pred in preds):
+        raise ValueError("Mo hinh tra ve nhan ngoai CLASSES")
     metrics = compute_performance_metrics(y_true, preds, CLASSES)
+    correct = sum(actual == predicted for actual, predicted in zip(y_true, preds))
+    threats = sum(actual != "benign" for actual in y_true)
+    detected = sum(actual != "benign" and predicted != "benign" for actual, predicted in zip(y_true, preds))
+    benign = total - threats
+    false_alarms = sum(actual == "benign" and predicted != "benign" for actual, predicted in zip(y_true, preds))
+    metrics.update({
+        "accuracy_ci95": wilson_interval(correct, total),
+        "threat_detection_rate": detected / threats if threats else 0.0,
+        "threat_detection_ci95": wilson_interval(detected, threats),
+        "false_benign_alarm_rate": false_alarms / benign if benign else 0.0,
+        "false_benign_alarm_ci95": wilson_interval(false_alarms, benign),
+    })
 
     print(f"\nKet qua [{model_name}] ({total:,} mau, thoi gian {total_eval_time}s - {speed:,} URL/s):")
     print(f"  Accuracy:  {metrics['accuracy']*100:.2f}%")
+    print(f"  CI 95% Accuracy: {metrics['accuracy_ci95'][0]*100:.2f}% - {metrics['accuracy_ci95'][1]*100:.2f}%")
     print(f"  Precision: {metrics['precision_weighted']*100:.2f}%")
     print(f"  Recall:    {metrics['recall_weighted']*100:.2f}%")
     print(f"  F1-Score:  {metrics['weighted_f1']*100:.2f}%")
     print(f"  Do tre:    {latency:.4f} ms/URL")
+    print(f"  Phat hien de doa: {metrics['threat_detection_rate']*100:.2f}% ({detected:,}/{threats:,})")
+    print(f"  CI 95% phat hien: {metrics['threat_detection_ci95'][0]*100:.2f}% - {metrics['threat_detection_ci95'][1]*100:.2f}%")
+    print(f"  Bao nham benign: {metrics['false_benign_alarm_rate']*100:.2f}% ({false_alarms:,}/{benign:,})")
+    print(f"  CI 95% bao nham: {metrics['false_benign_alarm_ci95'][0]*100:.2f}% - {metrics['false_benign_alarm_ci95'][1]*100:.2f}%")
 
     for cls_name, cls_m in metrics.get("per_class", {}).items():
         if cls_m["support"] > 0:
@@ -276,13 +290,9 @@ def run_evaluate(
     model_name: str = "all",
     samples: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
+    if samples is not None and samples <= 0:
+        raise ValueError("So mau phai duong")
     test_path = Path(test_file) if test_file else (DATA_PROCESSED_DIR / "test.csv")
-    if not test_path.exists():
-        for cand in [DATA_PROCESSED_DIR / "val.csv", DATA_PROCESSED_DIR / "04_features.csv"]:
-            if cand.exists():
-                test_path = cand
-                break
-
     if not test_path.exists():
         raise FileNotFoundError(f"Khong tim thay tap kiem thu: {test_path}. Vui long chay Buoc 06 truoc.")
 
@@ -298,6 +308,8 @@ def run_evaluate(
         dist[lbl] = dist.get(lbl, 0) + 1
     dist_str = ", ".join(f"{k}: {v:,}" for k, v in sorted(dist.items()))
     print(f"Da nap {len(urls):,} mau URL kiem thu ({dist_str})")
+    if len(urls) < 10000:
+        logger.warning("Tap danh gia chi co %s mau; khoang tin cay va ket luan theo lop co the kem on dinh", len(urls))
 
     runtime = ModelRuntime.get_instance()
     targets = list(MODEL_REGISTRY.keys()) if model_name == "all" else [model_name]
@@ -309,6 +321,9 @@ def run_evaluate(
             results.append(m_res)
         except Exception as e:
             print(f"\n[Bo qua] Khong the danh gia [{key}]: {e}")
+
+    if not results:
+        raise RuntimeError("Khong co mo hinh nao danh gia thanh cong")
 
     if len(results) > 1:
         print("\nBang so sanh hieu nang ca 3 mo hinh:")

@@ -96,78 +96,68 @@ def calc_entropy(text: str) -> float:
     counts = Counter(text)
     return round(-sum((c / n) * math.log2(c / n) for c in counts.values()), 4)
 
+FEATURE_COLUMNS = [
+    "_aic211_source_row", "url", "label", "url_length", "hostname_length",
+    "path_length", "entropy", "digit_ratio", "special_ratio", "dot_count",
+    "hyphen_count", "slash_count", "hostname_is_ip", "uses_https",
+    "suspicious_token_count", "tld", "channel", "source",
+]
+
+
+def _feature_values(row: Dict[str, str]) -> List[Any]:
+    url = (row.get("url") or "").strip()
+    if not url:
+        return []
+    has_scheme = "://" in url
+    target = url if has_scheme else "http://" + url
+    try:
+        parts = urlsplit(target)
+        scheme = parts.scheme.lower() if has_scheme else ""
+        host = (parts.hostname or "").lower()
+        path = parts.path or ""
+    except ValueError:
+        scheme, host, path = "", "", ""
+    length = len(url)
+    digits = sum(char.isdigit() for char in url)
+    specials = sum(not char.isalnum() for char in url)
+    return [
+        row.get("_aic211_source_row", ""), url, row.get("label", "unknown"),
+        length, len(host), len(path), calc_entropy(url),
+        round(digits / length, 4), round(specials / length, 4),
+        url.count("."), url.count("-"), url.count("/"),
+        int(is_ip_address(host)), int(scheme == "https"),
+        sum(url.lower().count(token) for token in SUSPICIOUS_TOKENS),
+        parse_tld(host), row.get("channel", ""), row.get("source", ""),
+    ]
+
+
 def _features_slice(args: Tuple[str, int, int, str]) -> int:
     in_file, start_pos, end_pos, part_out = args
     count = 0
     with open(in_file, "rb") as fin, open(part_out, "w", encoding="utf-8", newline="", buffering=8*1024*1024) as fout:
-        writer = csv.writer(fout)
+        header_raw = fin.readline()
+        header = next(csv.reader([header_raw.decode("utf-8-sig")]))
         if start_pos > 0:
-            fin.seek(start_pos)
-            skip_b = fin.readline()
-            cur_pos = start_pos + len(skip_b)
-        else:
-            fin.seek(0)
-            cur_pos = 0
-
-        while cur_pos < end_pos:
-            raw_b = fin.readline()
-            if not raw_b:
+            fin.seek(start_pos - 1)
+            if fin.read(1) != b"\n":
+                fin.readline()
+        writer = csv.writer(fout)
+        while fin.tell() < end_pos:
+            offset = fin.tell()
+            raw = fin.readline()
+            if not raw:
                 break
-            cur_pos += len(raw_b)
-
-            try:
-                line_str = raw_b.decode("utf-8", errors="ignore").strip()
-                if not line_str:
-                    continue
-                parts = [p.strip().strip('"') for p in line_str.split(",")]
-                if len(parts) < 3:
-                    continue
-                if cur_pos - len(raw_b) == 0 and "source_row" in line_str:
-                    continue
-
-                source_row = parts[0]
-                url = parts[1]
-                label = parts[2]
-
-                u_raw = url.strip()
-                if not u_raw:
-                    continue
-
-                has_scheme = "://" in u_raw
-                target = u_raw if has_scheme else ("http://" + u_raw)
-                try:
-                    p = urlsplit(target)
-                    scheme = p.scheme.lower() if has_scheme else ""
-                    host = (p.hostname or "").lower()
-                    path = p.path or ""
-                except Exception:
-                    scheme, host, path = "", "", ""
-
-                u_len = len(u_raw)
-                digits = sum(c.isdigit() for c in u_raw)
-                specials = sum(not c.isalnum() for c in u_raw)
-                url_lower = u_raw.lower()
-
-                digit_ratio = round(digits / u_len, 4) if u_len > 0 else 0.0
-                special_ratio = round(specials / u_len, 4) if u_len > 0 else 0.0
-                entropy = calc_entropy(u_raw)
-
-                hostname_is_ip = 1 if is_ip_address(host) else 0
-                uses_https = 1 if scheme == "https" else 0
-                tld_val = parse_tld(host)
-                suspicious_count = sum(url_lower.count(tok) for tok in SUSPICIOUS_TOKENS)
-
-                writer.writerow([
-                    source_row, u_raw, label, u_len, len(host), len(path),
-                    entropy, digit_ratio, special_ratio, u_raw.count("."),
-                    u_raw.count("-"), u_raw.count("/"), hostname_is_ip, uses_https,
-                    suspicious_count, tld_val
-                ])
-                count += 1
-            except Exception:
+            if not raw.strip():
                 continue
-
+            fields = next(csv.reader([raw.decode("utf-8").rstrip("\r\n")], strict=True))
+            if len(fields) != len(header):
+                raise ValueError(f"Malformed cleaned CSV row at byte {offset}: {in_file}")
+            values = _feature_values(dict(zip(header, fields)))
+            if values:
+                writer.writerow(values)
+                count += 1
     return count
+
 
 def run_features(
     input_file: Optional[str] = None,
@@ -177,116 +167,58 @@ def run_features(
 ) -> Path:
     in_path = Path(input_file) if input_file else DATA_PROCESSED_DIR / "03_cleaned.csv"
     out_path = Path(output_file) if output_file else DATA_PROCESSED_DIR / "04_features.csv"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
+    if in_path.resolve() == out_path.resolve():
+        raise ValueError("Input va output phai khac nhau")
     if not in_path.exists():
         raise FileNotFoundError(f"Khong tim thay tep dau vao: {in_path}")
+    if max_samples is not None and max_samples <= 0:
+        raise ValueError("So dong mau phai duong")
+    requested = workers if workers is not None else DEFAULT_WORKERS
+    if requested <= 0:
+        raise ValueError("So tien trinh phai duong")
+    num_workers = min(requested, os.cpu_count() or 1)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    started = time.time()
 
-    file_size = in_path.stat().st_size
-    num_workers = workers or DEFAULT_WORKERS
-    t0 = time.time()
-    header = [
-        "_aic211_source_row", "url", "label", "url_length", "hostname_length",
-        "path_length", "entropy", "digit_ratio", "special_ratio", "dot_count",
-        "hyphen_count", "slash_count", "hostname_is_ip", "uses_https",
-        "suspicious_token_count", "tld"
-    ]
-
-    print(f"Trich xuat dac trung: {in_path.name} ({round(file_size / (1024*1024), 2)} MB) - {num_workers} tien trinh", flush=True)
-
-    if max_samples and max_samples < 500000:
+    if max_samples is not None:
         count = 0
-        with open(out_path, "w", encoding="utf-8", newline="") as fout, open(in_path, "r", encoding="utf-8-sig", errors="ignore") as fin:
-            writer = csv.writer(fout)
-            writer.writerow(header)
+        with open(in_path, "r", encoding="utf-8-sig", newline="") as fin, open(out_path, "w", encoding="utf-8", newline="") as fout:
             reader = csv.DictReader(fin)
+            writer = csv.writer(fout)
+            writer.writerow(FEATURE_COLUMNS)
             for row in reader:
-                u_raw = (row.get("url") or "").strip()
-                if not u_raw:
-                    continue
-                label = (row.get("label") or "unknown").strip()
-                source_row = row.get("_aic211_source_row", count + 1)
-
-                has_scheme = "://" in u_raw
-                target = u_raw if has_scheme else ("http://" + u_raw)
-                try:
-                    p = urlsplit(target)
-                    scheme = p.scheme.lower() if has_scheme else ""
-                    host = (p.hostname or "").lower()
-                    path = p.path or ""
-                except Exception:
-                    scheme, host, path = "", "", ""
-
-                u_len = len(u_raw)
-                digits = sum(c.isdigit() for c in u_raw)
-                specials = sum(not c.isalnum() for c in u_raw)
-                url_lower = u_raw.lower()
-
-                digit_ratio = round(digits / u_len, 4) if u_len > 0 else 0.0
-                special_ratio = round(specials / u_len, 4) if u_len > 0 else 0.0
-                entropy = calc_entropy(u_raw)
-
-                hostname_is_ip = 1 if is_ip_address(host) else 0
-                uses_https = 1 if scheme == "https" else 0
-                tld_val = parse_tld(host)
-                suspicious_count = sum(url_lower.count(tok) for tok in SUSPICIOUS_TOKENS)
-
-                writer.writerow([
-                    source_row, u_raw, label, u_len, len(host), len(path),
-                    entropy, digit_ratio, special_ratio, u_raw.count("."),
-                    u_raw.count("-"), u_raw.count("/"), hostname_is_ip, uses_https,
-                    suspicious_count, tld_val
-                ])
-                count += 1
+                values = _feature_values(row)
+                if values:
+                    writer.writerow(values)
+                    count += 1
                 if count >= max_samples:
                     break
-        elapsed = round(time.time() - t0, 2)
-        avg_speed = int(count / max(elapsed, 0.1))
-        logger.info(f"Hoan thanh Buoc 05 -> Da trich xuat dac trung cho {count:,} dong trong {elapsed}s ({avg_speed:,} dong/s) vao {out_path.name}")
-        return out_path
-
-    temp_dir = out_path.parent / "_temp_features"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-
-    chunk_bytes = file_size // num_workers
-    tasks = []
-    part_files = []
-
-    for i in range(num_workers):
-        start_b = i * chunk_bytes
-        end_b = file_size if i == (num_workers - 1) else (i + 1) * chunk_bytes
-        p_file = temp_dir / f"part_{i:02d}.csv"
-        part_files.append(p_file)
-        tasks.append((str(in_path), start_b, end_b, str(p_file)))
-
-    with mp.Pool(processes=num_workers) as pool:
-        counts = pool.map(_features_slice, tasks)
-
-    total_feat = sum(counts)
-    t_process = round(time.time() - t0, 2)
-    speed_proc = int(total_feat / max(t_process, 0.1))
-    print(f"Xong xu ly song song: {total_feat:,} dong trong {t_process}s ({speed_proc:,} dong/s)", flush=True)
-
-    with open(out_path, "w", encoding="utf-8", newline="") as fout:
-        writer = csv.writer(fout)
-        writer.writerow(header)
-        for pf in part_files:
-            if pf.exists():
-                with open(pf, "r", encoding="utf-8", errors="ignore") as pfin:
-                    shutil.copyfileobj(pfin, fout, length=16 * 1024 * 1024)
-                try:
-                    pf.unlink()
-                except Exception:
-                    pass
-
-    try:
+    else:
+        file_size = in_path.stat().st_size
+        chunk_bytes = max(1, file_size // num_workers)
+        temp_dir = out_path.parent / "_temp_features"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        tasks = []
+        parts = []
+        for index in range(num_workers):
+            start_byte = index * chunk_bytes
+            end_byte = file_size if index == num_workers - 1 else (index + 1) * chunk_bytes
+            part = temp_dir / f"part_{index:02d}.csv"
+            tasks.append((str(in_path), start_byte, end_byte, str(part)))
+            parts.append(part)
+        with mp.Pool(processes=num_workers) as pool:
+            counts = pool.map(_features_slice, tasks)
+        count = sum(counts)
+        with open(out_path, "w", encoding="utf-8", newline="") as fout:
+            csv.writer(fout).writerow(FEATURE_COLUMNS)
+            for part in parts:
+                with open(part, "r", encoding="utf-8", newline="") as fin:
+                    shutil.copyfileobj(fin, fout, length=16 * 1024 * 1024)
+                part.unlink()
         temp_dir.rmdir()
-    except Exception:
-        pass
 
-    elapsed_total = round(time.time() - t0, 2)
-    avg_speed = int(total_feat / max(elapsed_total, 0.1))
-    logger.info(f"Hoan thanh Buoc 05 -> Da trich xuat dac trung {total_feat:,} ban ghi trong {elapsed_total}s ({avg_speed:,} dong/s) vao {out_path.name}")
+    elapsed = round(time.time() - started, 2)
+    logger.info("Hoan thanh Buoc 05 -> %s dong trong %ss vao %s", f"{count:,}", elapsed, out_path.name)
     return out_path
 
 def prompt_menu_input() -> Tuple[Optional[str], Optional[str], Optional[int], Optional[int]]:
