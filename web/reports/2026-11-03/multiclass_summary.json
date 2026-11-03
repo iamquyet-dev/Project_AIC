@@ -1,0 +1,217 @@
+{
+  "timestamp": "2026-11-03T11:31:58+07:00",
+  "task": "multi_class_classification",
+  "dataset": "test.csv",
+  "total_rows": 6484817,
+  "classes": [
+    "benign",
+    "malicious",
+    "phishing",
+    "malware"
+  ],
+  "class_distribution": {
+    "benign": 3423772,
+    "phishing": 2115471,
+    "malicious": 517099,
+    "malware": 428475
+  },
+  "models": [
+    {
+      "name": "1. Linear SVM (Word + Char n-grams)",
+      "model_key": "svm",
+      "accuracy": 0.8045,
+      "precision_weighted": 0.8082,
+      "recall_weighted": 0.8045,
+      "weighted_f1": 0.8044,
+      "macro_precision": 0.6934,
+      "macro_recall": 0.7057,
+      "macro_f1": 0.6963,
+      "latency_ms": 0.1414,
+      "per_class": {
+        "benign": {
+          "precision": 0.8553,
+          "recall": 0.8981,
+          "f1": 0.8762,
+          "support": 3423772
+        },
+        "malicious": {
+          "precision": 0.5216,
+          "recall": 0.4832,
+          "f1": 0.5016,
+          "support": 517099
+        },
+        "phishing": {
+          "precision": 0.8561,
+          "recall": 0.7556,
+          "f1": 0.8027,
+          "support": 2115471
+        },
+        "malware": {
+          "precision": 0.5407,
+          "recall": 0.686,
+          "f1": 0.6048,
+          "support": 428475
+        }
+      },
+      "confusion_matrix": [
+        [
+          3074863,
+          73365,
+          210797,
+          64747
+        ],
+        [
+          95243,
+          249847,
+          32917,
+          139092
+        ],
+        [
+          377190,
+          94054,
+          1598386,
+          45841
+        ],
+        [
+          47779,
+          61757,
+          24999,
+          293940
+        ]
+      ]
+    },
+    {
+      "name": "2. Logistic Regression (TF-IDF)",
+      "model_key": "logistic_tfidf",
+      "accuracy": 0.739,
+      "precision_weighted": 0.7422,
+      "recall_weighted": 0.739,
+      "weighted_f1": 0.7315,
+      "macro_precision": 0.6041,
+      "macro_recall": 0.6087,
+      "macro_f1": 0.5962,
+      "latency_ms": 0.024,
+      "per_class": {
+        "benign": {
+          "precision": 0.79,
+          "recall": 0.9074,
+          "f1": 0.8447,
+          "support": 3423772
+        },
+        "malicious": {
+          "precision": 0.3277,
+          "recall": 0.2606,
+          "f1": 0.2903,
+          "support": 517099
+        },
+        "phishing": {
+          "precision": 0.8193,
+          "recall": 0.5976,
+          "f1": 0.6911,
+          "support": 2115471
+        },
+        "malware": {
+          "precision": 0.4794,
+          "recall": 0.6692,
+          "f1": 0.5586,
+          "support": 428475
+        }
+      },
+      "confusion_matrix": [
+        [
+          3106793,
+          68390,
+          163862,
+          84727
+        ],
+        [
+          144834,
+          134765,
+          92245,
+          145255
+        ],
+        [
+          603048,
+          166882,
+          1264144,
+          81397
+        ],
+        [
+          77844,
+          41260,
+          22618,
+          286753
+        ]
+      ]
+    },
+    {
+      "name": "3. Logistic Regression (Lexical)",
+      "model_key": "logistic_lexical",
+      "accuracy": 0.5908,
+      "precision_weighted": 0.5999,
+      "recall_weighted": 0.5908,
+      "weighted_f1": 0.5941,
+      "macro_precision": 0.4353,
+      "macro_recall": 0.4393,
+      "macro_f1": 0.4356,
+      "latency_ms": 0.0629,
+      "per_class": {
+        "benign": {
+          "precision": 0.7012,
+          "recall": 0.724,
+          "f1": 0.7124,
+          "support": 3423772
+        },
+        "malicious": {
+          "precision": 0.2569,
+          "recall": 0.2757,
+          "f1": 0.2659,
+          "support": 517099
+        },
+        "phishing": {
+          "precision": 0.6052,
+          "recall": 0.5249,
+          "f1": 0.5622,
+          "support": 2115471
+        },
+        "malware": {
+          "precision": 0.178,
+          "recall": 0.2327,
+          "f1": 0.2017,
+          "support": 428475
+        }
+      },
+      "confusion_matrix": [
+        [
+          2478657,
+          182023,
+          583419,
+          179673
+        ],
+        [
+          254852,
+          142553,
+          56432,
+          63262
+        ],
+        [
+          624263,
+          163231,
+          1110504,
+          217473
+        ],
+        [
+          177151,
+          67163,
+          84475,
+          99686
+        ]
+      ]
+    }
+  ],
+  "plots": {
+    "cm_word_char_svm": "outputs/figures/cm_word_char_svm.png",
+    "cm_word_tfidf_logistic": "outputs/figures/cm_word_tfidf_logistic.png",
+    "cm_lexical_logistic": "outputs/figures/cm_lexical_logistic.png"
+  }
+}

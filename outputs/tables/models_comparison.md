@@ -2,6 +2,6 @@
 
 | Mo hinh | Accuracy | Precision (Weighted) | Recall (Weighted) | Weighted-F1 | Do tre (ms/URL) |
 |---|---|---|---|---|---|
-| **1. Linear SVM (Word + Char n-grams)** | 80.30% | 80.72% | 80.30% | 80.32% | 0.2900 ms |
-| **2. Logistic Regression (TF-IDF)** | 73.50% | 73.71% | 73.50% | 72.59% | 0.0500 ms |
-| **3. Logistic Regression (Lexical)** | 57.00% | 57.25% | 57.00% | 57.06% | 0.1000 ms |
+| **1. Linear SVM (Word + Char n-grams)** | 80.45% | 80.82% | 80.45% | 80.44% | 0.1414 ms |
+| **2. Logistic Regression (TF-IDF)** | 73.90% | 74.22% | 73.90% | 73.15% | 0.0240 ms |
+| **3. Logistic Regression (Lexical)** | 59.08% | 59.99% | 59.08% | 59.41% | 0.0629 ms |

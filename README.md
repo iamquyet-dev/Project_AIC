@@ -8,156 +8,180 @@ Hệ thống học máy phát hiện nguy cơ an ninh mạng từ liên kết UR
 
 ---
 
-## 1. Cấu Trúc Dự Án Chi Tiết (Project Directory Tree)
+## 1. Sơ Đồ Luồng Hoạt Động Của Hệ Thống (Workflow Architecture)
+
+Dành cho người mới hoặc người đánh giá đề tài hiểu nhanh cách hệ thống vận hành:
 
 ```text
-Project_AIC/
-├── data/                                    # Quản lý kho dữ liệu thô và đã xử lý
-│   ├── raw/                                 # 41 tập dữ liệu an ninh mạng thô từ Kaggle, PhishVN, Mendeley, Tranco...
-│   │   ├── compphish/                       # Dữ liệu phishing so sánh
-│   │   ├── deepurlbench/                    # Bộ benchmark URL chiều sâu
-│   │   ├── kaggle_domain_features/          # Đặc trưng tên miền Kaggle
-│   │   ├── kaggle_malicious_websites/       # Danh sách website độc hại Kaggle
-│   │   ├── kaggle_phishing_features/        # Thuộc tính phishing nâng cao
-│   │   ├── kaggle_phishing_site_urls/       # Tập mẫu URL phishing thực tế
-│   │   ├── majestic_domain_ranking/         # Xếp hạng uy tín tên miền Majestic
-│   │   ├── mendeley_large_url_corpus/       # Tập ngữ liệu lớn Mendeley
-│   │   ├── openphish_snapshot/              # Nguồn dữ liệu thời gian thực OpenPhish
-│   │   ├── phishvn_open/                    # Bộ dữ liệu lừa đảo tiếng Việt PhishVN
-│   │   ├── tranco_domain_ranking/           # Danh sách Top 1 triệu tên miền tin cậy Tranco
-│   │   └── uci_phiusiil_2024/               # Bộ dữ liệu chuẩn quốc tế UCI Phiusiil 2024
-│   └── processed/                           # Dữ liệu hợp nhất sau pipeline làm sạch & chuẩn hóa
-│       ├── 01_parsed.csv                    # Dữ liệu bóc tách thô đa nguồn
-│       ├── 02_normalized.csv                # Chuẩn hóa cấu trúc URL và nhãn phân loại
-│       ├── 03_cleaned.csv                   # Loại bỏ trùng lặp, lọc URL hợp lệ
-│       ├── 03_rejected.csv                  # Nhật ký các dòng rác bị loại bỏ
-│       ├── 04_features.csv                  # Dữ liệu trích xuất đặc trưng
-│       ├── train.csv                        # Tập huấn luyện (~30.28 triệu mẫu, phân bố đều 4 lớp)
-│       ├── val.csv                          # Tập kiểm định (~6.48 triệu mẫu)
-│       ├── test.csv                         # Tập kiểm thử độc lập (~6.48 triệu mẫu)
-│       └── dataset_version.json             # Siêu dữ liệu cấu hình phiên bản tập dữ liệu
-│
-├── steps/                                   # Quy trình thực thi 8 bước chuẩn học máy
-│   ├── __init__.py                          # Package khởi tạo
-│   ├── step_01_collection.py                # Bước 1: Quét và thu thập các nguồn dữ liệu thô
-│   ├── step_02_parsing.py                   # Bước 2: Bóc tách cú pháp đa định dạng (CSV, JSON, TSV, Text)
-│   ├── step_03_normalize.py                 # Bước 3: Chuẩn hóa nhãn về 4 lớp chuẩn & tiền tố URL
-│   ├── step_04_clean.py                     # Bước 4: Làm sạch, khử trùng lặp, kiểm tra tính hợp lệ
-│   ├── step_05_features.py                  # Bước 5: Trích xuất đặc trưng cấu trúc & từ vựng URL
-│   ├── step_06_dataset.py                   # Bước 6: Phân chia tập dữ liệu train / val / test phân tầng
-│   ├── step_07_model.py                     # Bước 7: Menu điều hướng huấn luyện mô hình
-│   ├── step_07_train.py                     # Bước 7 (Lõi): Huấn luyện 3 mô hình (Online Learning, partial_fit theo lô 200k)
-│   ├── step_08_evaluate.py                  # Bước 8: Đánh giá mô hình, tự động xuất ma trận nhầm lẫn & báo cáo ngày
-│   └── run_all.py                           # Kịch bản thực thi tuần tự từ bước 01 đến bước 08
-│
-├── url_detector/                            # Thư viện thuật toán cốt lõi của hệ thống
-│   ├── __init__.py                          # Khởi tạo module
-│   ├── common.py                            # Đo Shannon entropy, tính metric (Precision, Recall, F1, Matrix)
-│   ├── config.py                            # Cấu hình danh mục 4 lớp, đường dẫn và danh sách từ khóa nghi vấn
-│   ├── detector.py                          # ThreatDetector engine (tính điểm rủi ro & đưa ra cảnh báo)
-│   ├── extractor.py                         # LexicalFeatureExtractor (11 đặc trưng cấu trúc URL)
-│   ├── model_runtime.py                     # Nạp mô hình tối ưu bộ nhớ RAM, đo độ trễ suy luận
-│   └── thresholded.py                       # Quản lý ngưỡng cảnh báo đa cấp (An toàn / Nghi vấn / Độc hại)
-│
-├── outputs/                                 # Kết quả đầu ra của quá trình huấn luyện & đánh giá
-│   ├── figures/                             # Biểu đồ ma trận nhầm lẫn (Confusion Matrix)
-│   │   ├── cm_word_char_svm.png             # Ma trận mô hình Linear SVM (Word + Char n-grams)
-│   │   ├── cm_word_tfidf_logistic.png       # Ma trận mô hình Logistic Regression (Word TF-IDF)
-│   │   ├── cm_lexical_logistic.png          # Ma trận mô hình Logistic Regression (Lexical Features)
-│   │   └── YYYY-MM-DD/                      # Thư mục lưu trữ lịch sử đánh giá theo từng ngày chạy
-│   ├── metrics/                             # Tệp báo cáo số liệu JSON
-│   │   ├── multiclass_summary.json          # Báo cáo đánh giá đầy đủ 4 lớp của các mô hình
-│   │   └── YYYY-MM-DD/                      # Thư mục lưu trữ JSON theo từng ngày chạy
-│   ├── models/                              # Lưu trữ mô hình huấn luyện hoàn chỉnh (.joblib)
-│   │   ├── model_word_char_svm.joblib       # Mô hình Linear SVM
-│   │   ├── model_word_tfidf_logistic.joblib # Mô hình Logistic TF-IDF
-│   │   └── model_lexical_logistic.joblib    # Mô hình Logistic Lexical
-│   └── tables/                              # Bảng thống kê so sánh hiệu năng
-│       ├── models_comparison.csv            # Bảng so sánh định dạng bảng CSV
-│       ├── models_comparison.md             # Bảng so sánh định dạng Markdown
-│       └── YYYY-MM-DD/                      # Thư mục lưu trữ bảng so sánh theo từng ngày chạy
-│
-├── web/                                     # Nền tảng ứng dụng Web độc lập (chạy Local hoặc VPS)
-│   ├── models/                              # Thư mục chứa mô hình phục vụ suy luận thời gian thực
-│   │   ├── model_word_char_svm.joblib
-│   │   ├── model_word_tfidf_logistic.joblib
-│   │   └── model_lexical_logistic.joblib
-│   ├── reports/                             # Báo cáo, bảng so sánh và biểu đồ ma trận phục vụ giao diện
-│   │   ├── cm_word_char_svm.png
-│   │   ├── cm_word_tfidf_logistic.png
-│   │   ├── cm_lexical_logistic.png
-│   │   ├── models_comparison.csv
-│   │   ├── models_comparison.md
-│   │   └── multiclass_summary.json
-│   ├── static/                              # Tài nguyên giao diện người dùng
-│   │   ├── app.js                           # Xử lý sự kiện giao diện, gọi API phân tích, chuyển mô hình
-│   │   ├── index.html                       # Giao diện Dark Mode chuyên nghiệp chuẩn Trung tâm SOC
-│   │   └── styles.css                       # Thiết kế responsive, bảng màu tương phản cao
-│   ├── uploads/                             # Thư mục tạm cho tệp kiểm tra người dùng tải lên
-│   ├── url_detector/                        # Thư viện thuật toán nhúng trực tiếp phục vụ web
-│   ├── .htaccess                            # Cấu hình máy chủ web Apache/LiteSpeed
-│   ├── app.py                               # Server backend phục vụ API RESTful & phân phối giao diện
-│   ├── core.py                              # Bộ xử lý suy luận, tương thích nạp mô hình không phụ thuộc môi trường
-│   ├── requirements.txt                     # Thư viện tối giản cho môi trường web
-│   └── test.py                              # Kịch bản kiểm thử nhanh các API của web
-│
-├── .gitattributes                           # Cấu hình xử lý xuống dòng Git (LF/CRLF)
-├── .gitignore                               # Bỏ qua tệp nén lớn, bộ nhớ đệm, môi trường ảo
-├── README.md                                # Tài liệu kỹ thuật chi tiết của dự án
-├── requirements.txt                         # Toàn bộ thư viện phụ thuộc Python của dự án
-└── run_all.py                               # Kịch bản chạy toàn bộ pipeline ngay từ thư mục gốc
+[ DỮ LIỆU ĐẦU VÀO (data/) ]
+  41 tập dữ liệu thô (Kaggle, PhishVN, Mendeley, Tranco...)
+               │
+               ▼
+[ QUY TRÌNH 8 BƯỚC (steps/) ]
+  01. Thu thập  ──>  02. Bóc tách  ──>  03. Chuẩn hóa  ──>  04. Làm sạch
+  05. Đặc trưng ──>  06. Chia tập  ──>  07. Huấn luyện ──>  08. Đánh giá
+               │
+               ▼
+[ KẾT QUẢ ĐẦU RA (outputs/) ]
+  ├── 3 Mô hình trí tuệ nhân tạo (.joblib)
+  ├── Biểu đồ ma trận nhầm lẫn (Confusion Matrix .png)
+  └── Báo cáo số liệu đánh giá (JSON, CSV, Markdown)
+               │
+               ▼
+[ ỨNG DỤNG THỰC TẾ (web/) ]
+  Giao diện Dark Mode chuẩn SOC: Phân tích URL thời gian thực, đo độ trễ, cảnh báo đa cấp
 ```
 
 ---
 
-## 2. Bảng Đánh Giá Hiệu Năng 3 Mô Hình
+## 2. Cây Thư Mục Dự Án (Dễ Hiểu - Giải Thích Chi Tiết Từng File)
 
-Kết quả kiểm thử độc lập trên **6.484.817 mẫu URL** (tập `test.csv` hoàn toàn mới):
+```text
+Project_AIC/
+│
+├── 📂 data/                                 # [KHO DỮ LIỆU] - Chứa toàn bộ dữ liệu của đề tài
+│   ├── 📁 raw/                              # Dữ liệu THÔ thu thập từ 41 nguồn an ninh mạng quốc tế & Việt Nam
+│   │   ├── compphish/                       # Mẫu URL lừa đảo so sánh
+│   │   ├── kaggle_malicious_websites/       # Danh sách website độc hại từ Kaggle
+│   │   ├── mendeley_large_url_corpus/       # Tập dữ liệu nghiên cứu lớn của Mendeley
+│   │   ├── openphish_snapshot/              # Luồng cấp dữ liệu phishing thời gian thực
+│   │   ├── phishvn_open/                    # Bộ dữ liệu lừa đảo tiếng Việt (PhishVN)
+│   │   ├── tranco_domain_ranking/           # Danh sách 1 triệu tên miền an toàn, phổ biến nhất thế giới
+│   │   └── uci_phiusiil_2024/               # Bộ dữ liệu lừa đảo chuẩn học thuật UCI 2024
+│   │
+│   └── 📁 processed/                        # Dữ liệu ĐÃ QUA XỬ LÝ (sau khi lọc sạch & chuẩn hóa)
+│       ├── 01_parsed.csv                    # Dữ liệu sau bước 02: Bóc tách cấu trúc ban đầu
+│       ├── 02_normalized.csv                # Dữ liệu sau bước 03: Đã chuẩn hóa về 4 nhãn chuẩn
+│       ├── 03_cleaned.csv                   # Dữ liệu sau bước 04: Đã loại bỏ trùng lặp và link rác
+│       ├── 03_rejected.csv                  # Nhật ký các dòng bị từ chối/loại bỏ vì sai định dạng
+│       ├── 04_features.csv                  # Dữ liệu sau bước 05: Đã trích xuất các thuộc tính URL
+│       ├── train.csv                        # Tập HUẤN LUYỆN: ~30.28 triệu mẫu URL sạch
+│       ├── val.csv                          # Tập KIỂM ĐỊNH: ~6.48 triệu mẫu URL (dùng tinh chỉnh tham số)
+│       ├── test.csv                         # Tập KIỂM THỬ ĐỘC LẬP: ~6.48 triệu mẫu URL (đo độ chính xác)
+│       └── dataset_version.json             # File lưu thông tin phiên bản và số lượng mẫu từng lớp
+│
+├── 📂 steps/                                # [QUY TRÌNH HỌC MÁY] - 8 bước thực thi tự động từ A-Z
+│   ├── step_01_collection.py                # Bước 1: Thu thập, quét và thống kê toàn bộ file dữ liệu thô
+│   ├── step_02_parsing.py                   # Bước 2: Bóc tách các định dạng khác nhau (CSV, JSON, Text) về bảng
+│   ├── step_03_normalize.py                 # Bước 3: Chuẩn hóa nhãn (đưa về 4 nhãn chuẩn) và tiền tố URL
+│   ├── step_04_clean.py                     # Bước 4: Làm sạch, khử trùng lặp tuyệt đối, xóa URL lỗi
+│   ├── step_05_features.py                  # Bước 5: Trích xuất đặc trưng (độ dài, entropy, số chấm, từ khóa nghi vấn)
+│   ├── step_06_dataset.py                   # Bước 6: Phân chia tập dữ liệu train/val/test theo tỷ lệ chuẩn phân tầng
+│   ├── step_07_model.py                     # Bước 7 (Menu): Giao diện chọn mô hình và số lượng mẫu cần train
+│   ├── step_07_train.py                     # Bước 7 (Lõi): Thuật toán train theo lô (200k/lô), học tăng tiến, n-grams
+│   ├── step_08_evaluate.py                  # Bước 8: Đánh giá độ chính xác, tự động vẽ ma trận nhầm lẫn & lưu theo ngày
+│   └── run_all.py                           # File chạy tự động liên hoàn từ bước 01 đến bước 08
+│
+├── 📂 url_detector/                         # [BỘ NÃO THUẬT TOÁN] - Thư viện lõi xử lý và suy luận URL
+│   ├── __init__.py                          # Khởi tạo gói Python
+│   ├── common.py                            # Các hàm toán học: Tính Shannon Entropy, độ đo Precision/Recall/F1
+│   ├── config.py                            # Cấu hình danh sách 4 nhãn, đường dẫn thư mục, danh mục từ khóa nguy hiểm
+│   ├── detector.py                          # Động cơ ThreatDetector: Tổng hợp kết quả và tính mức độ nguy hại (%)
+│   ├── extractor.py                         # LexicalFeatureExtractor: Trích xuất 11 đặc trưng cấu trúc URL
+│   ├── model_runtime.py                     # Quản lý nạp model vào RAM, tối ưu tốc độ và đo độ trễ suy luận
+│   └── thresholded.py                       # Cơ chế phân ngưỡng cảnh báo (An toàn < 40%, Nghi vấn 40-65%, Độc hại > 65%)
+│
+├── 📂 outputs/                              # [KẾT QUẢ ĐẦU RA] - Sản phẩm sau khi huấn luyện và đánh giá
+│   ├── 📁 models/                           # 3 file mô hình máy học hoàn chỉnh (đã huấn luyện xong)
+│   │   ├── model_word_char_svm.joblib       # 1. Linear SVM (kết hợp từ vựng + ký tự n-gram 3-5 ký tự)
+│   │   ├── model_word_tfidf_logistic.joblib # 2. Logistic Regression TF-IDF (tần suất từ ngữ)
+│   │   └── model_lexical_logistic.joblib    # 3. Logistic Regression Lexical (11 đặc trưng cấu trúc)
+│   │
+│   ├── 📁 figures/                          # Biểu đồ Ma trận nhầm lẫn (Confusion Matrix Heatmap)
+│   │   ├── cm_word_char_svm.png             # Biểu đồ ma trận 4x4 mô hình SVM
+│   │   ├── cm_word_tfidf_logistic.png       # Biểu đồ ma trận 4x4 mô hình Logistic TF-IDF
+│   │   ├── cm_lexical_logistic.png          # Biểu đồ ma trận 4x4 mô hình Lexical
+│   │   └── 📁 YYYY-MM-DD/                   # Thư mục lưu trữ lịch sử biểu đồ theo từng ngày chạy
+│   │
+│   ├── 📁 metrics/                          # File báo cáo số liệu chi tiết
+│   │   ├── multiclass_summary.json          # Toàn bộ thông số F1, Precision, Recall từng lớp của 3 mô hình
+│   │   └── 📁 YYYY-MM-DD/                   # Thư mục lưu trữ lịch sử JSON theo từng ngày chạy
+│   │
+│   └── 📁 tables/                           # Bảng so sánh hiệu năng tổng hợp
+│       ├── models_comparison.csv            # Bảng so sánh định dạng bảng tính CSV
+│       ├── models_comparison.md             # Bảng so sánh định dạng văn bản Markdown
+│       └── 📁 YYYY-MM-DD/                   # Thư mục lưu trữ bảng so sánh theo từng ngày chạy
+│
+├── 📂 web/                                  # [ỨNG DỤNG WEB THỰC TẾ] - Giao diện phân tích URL trực quan
+│   ├── 📁 models/                           # Chứa các mô hình máy học phục vụ suy luận trực tiếp cho web
+│   ├── 📁 reports/                          # Chứa biểu đồ ma trận và báo cáo thống kê hiển thị lên giao diện
+│   ├── 📁 static/                           # Giao diện người dùng (Frontend)
+│   │   ├── index.html                       # Trang web trung tâm SOC: nhập URL, xem tỷ lệ %, tra cứu kết quả
+│   │   ├── styles.css                       # Giao diện Dark Mode hiện đại, tối ưu hiển thị trên di động & máy tính
+│   │   └── app.js                           # Xử lý logic gọi API phân tích URL, đổi mô hình, phóng to biểu đồ
+│   ├── 📁 url_detector/                     # Module thuật toán nhúng trực tiếp, giúp web chạy độc lập không phụ thuộc
+│   ├── app.py                               # Web Server backend: phục vụ API phân tích URL và phân phối trang web
+│   ├── core.py                              # Bộ xử lý suy luận cốt lõi: nạp mô hình, tính ma trận xác suất 4 lớp
+│   ├── CHAY_WEB.cmd                         # File bấm đúp chuột (1-click) để khởi động web ngay lập tức
+│   └── requirements.txt                     # Danh sách thư viện Python tối giản dành riêng cho môi trường Web
+│
+├── .gitignore                               # Quy tắc loại trừ: không đưa file rác, file tạm, file nén nặng lên Git
+├── README.md                                # Tài liệu giới thiệu và hướng dẫn toàn diện của dự án
+├── requirements.txt                         # Danh sách toàn bộ thư viện cần thiết cho toàn bộ dự án
+└── run_all.py                               # Kịch bản chạy toàn bộ quy trình ngay tại thư mục gốc
+```
 
-| Mô hình | Đặc trưng trích xuất | Accuracy | Precision (Weighted) | Recall (Weighted) | F1-Score (Weighted) | Tốc độ xử lý | Độ trễ | Dung lượng |
+---
+
+## 3. Bảng Tra Cứu Nhanh 5 Khối Thành Phần
+
+| Khối chức năng | Thư mục | Vai trò chính | Người sử dụng chính |
+|---|---|---|---|
+| **Dữ liệu (Data)** | `data/` | Lưu trữ 41 nguồn thô và 3 tập mẫu `train/val/test` sạch | Kỹ sư dữ liệu (Data Engineer) |
+| **Quy trình (Pipeline)** | `steps/` | 8 script độc lập thực thi từ tiền xử lý đến train & test | Kỹ sư máy học (ML Engineer) |
+| **Thuật toán (Core Engine)** | `url_detector/` | Trích xuất đặc trưng, tính entropy, luật chấm điểm nguy hại | Lập trình viên thuật toán |
+| **Sản phẩm (Outputs)** | `outputs/` | Chứa file não mô hình `.joblib`, biểu đồ nhiệt `.png`, báo cáo `.json` | Người đánh giá / Báo cáo đề tài |
+| **Ứng dụng (Web App)** | `web/` | Web phân tích trực quan cho người dùng cuối kiểm tra link nghi vấn | Người dùng / Chuyên viên an ninh mạng |
+
+---
+
+## 4. Bảng Đánh Giá Hiệu Năng 3 Mô Hình Huấn Luyện
+
+Kết quả kiểm thử thực tế trên **6.484.817 mẫu URL** (tập `test.csv` hoàn toàn mới, độc lập 100% với tập train):
+
+| Mô hình | Đặc trưng trích xuất | Accuracy | Precision | Recall | F1-Score | Tốc độ quét | Độ trễ suy luận | Dung lượng file |
 |---|---|---|---|---|---|---|---|---|
 | **Linear SVM** | Word + Char n-grams (3-5 ký tự) | **80.61%** | **80.94%** | **80.61%** | **80.65%** | 6.052 URL/s | 0.1652 ms | 2.67 MB |
 | **Logistic Regression** | Word TF-IDF | **75.89%** | **76.28%** | **75.89%** | **75.83%** | **44.416 URL/s** | **0.0225 ms** | 1.89 MB |
 | **Logistic Regression** | 11 đặc trưng cấu trúc (Lexical) | **59.08%** | **59.99%** | **59.08%** | **59.41%** | 17.746 URL/s | 0.0564 ms | 1.6 KB |
 
-### Chi tiết nhận diện theo từng lớp (Mô hình tốt nhất: Linear SVM):
-- **Benign (An toàn)**: Precision = 86.0%, Recall = 89.2%, **F1-Score = 87.6%** (trên 3.423.772 mẫu).
-- **Phishing (Lừa đảo)**: Precision = 85.1%, Recall = 76.8%, **F1-Score = 80.7%** (trên 2.115.471 mẫu).
-- **Malware (Mã độc)**: Precision = 54.8%, Recall = 67.3%, **F1-Score = 60.4%** (trên 428.475 mẫu).
-- **Malicious (Độc hại)**: Precision = 52.3%, Recall = 50.2%, **F1-Score = 51.2%** (trên 517.099 mẫu).
+### Đánh giá chất lượng nhận diện (Mô hình Linear SVM):
+- **Benign (An toàn)**: Đạt F1-Score **87.6%** (Độ chính xác 86.0%, độ phủ 89.2% trên 3.423.772 link).
+- **Phishing (Lừa đảo)**: Đạt F1-Score **80.7%** (Độ chính xác 85.1%, độ phủ 76.8% trên 2.115.471 link).
+- **Malware (Mã độc)**: Đạt F1-Score **60.4%** (trên 428.475 link).
+- **Malicious (Độc hại)**: Đạt F1-Score **51.2%** (trên 517.099 link).
 
 ---
 
-## 3. Hướng Dẫn Sử Dụng & Vận Hành
+## 5. Hướng Dẫn Vận Hành Hệ Thống
 
-### Cài đặt môi trường
+### 1. Cài đặt thư viện
 ```bash
 pip install -r requirements.txt
 ```
 
-### Chạy quy trình từng bước
-- **Huấn luyện mô hình**:
-  ```bash
-  cd steps
-  python step_07_train.py
-  ```
-  *(Hỗ trợ huấn luyện từ đầu hoặc huấn luyện tăng tiến - Incremental learning, tự động đồng bộ sang Web)*.
-
-- **Đánh giá & Xuất báo cáo**:
-  ```bash
-  cd steps
-  python step_08_evaluate.py
-  ```
-  *(Tự động vẽ ma trận nhầm lẫn, lưu vào cả `outputs/figures/` và thư mục lưu trữ theo ngày)*.
-
-- **Chạy toàn bộ Pipeline tự động**:
-  ```bash
-  python run_all.py
-  ```
-
-### Khởi động Giao diện Web
+### 2. Huấn luyện mô hình mới (Step 07)
 ```bash
-cd web
-python app.py --port 8501
+cd steps
+python step_07_train.py
 ```
-Mở trình duyệt truy cập: `http://localhost:8501` hoặc qua domain máy chủ triển khai.
+- Chọn `1`: Huấn luyện mới từ đầu (hoặc `2`: Huấn luyện tăng tiến trên nền mô hình cũ).
+- Chọn số dòng: Mặc định chọn `4` (toàn bộ 30.28 triệu dòng).
+- *Sau khi huấn luyện xong, mô hình sẽ tự động cập nhật vào cả thư mục `outputs/models/` và `web/models/`*.
+
+### 3. Đánh giá mô hình & Xuất báo cáo (Step 08)
+```bash
+cd steps
+python step_08_evaluate.py
+```
+- Tự động kiểm thử mô hình trên tập `test.csv` (hoặc `val.csv`).
+- Tự động vẽ và lưu biểu đồ ma trận nhầm lẫn (`cm_*.png`) vào `outputs/figures/` và thư mục lưu trữ theo ngày (`outputs/figures/YYYY-MM-DD/`).
+
+### 4. Khởi động Web phân tích URL
+- **Cách 1 (Nhanh nhất trên Windows)**: Vào thư mục `web` và bấm đúp chuột vào file `CHAY_WEB.cmd`.
+- **Cách 2 (Lệnh dòng lệnh)**:
+  ```bash
+  cd web
+  python app.py --port 8501
+  ```
+- Mở trình duyệt và truy cập: `http://localhost:8501` (hoặc domain VPS `http://aic.t1m.tech`).
