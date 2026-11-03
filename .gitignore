@@ -52,3 +52,5 @@ data/
 *.zip
 *.tar.gz
 *.7z
+*.md
+*.cmd

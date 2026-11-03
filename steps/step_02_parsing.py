@@ -8,6 +8,10 @@ import logging
 import math
 import multiprocessing as mp
 import os
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 from pathlib import Path
 import re
 import shutil
@@ -16,6 +20,8 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import zipfile
+
+csv.field_size_limit(16 * 1024 * 1024)
 
 try:
     import pyarrow.parquet as pq
@@ -198,13 +204,11 @@ def _map_label(val: Any, source_name: str) -> str:
     elif vl in ("defacement", "defaced", "deface"):
         return "defacement"
 
+    # Only feeds explicitly documented as single-class may supply a missing label.
+    # Popularity rankings (Tranco/Majestic) do not establish a benign label.
     s_low = source_name.lower()
-    if "phish" in s_low:
+    if s_low in {"openphish_snapshot", "phishing_database_snapshot"}:
         return "phishing"
-    elif "malware" in s_low or "malicious" in s_low:
-        return "malware"
-    elif "benign" in s_low or "tranco" in s_low or "majestic" in s_low:
-        return "benign"
     return "unknown"
 
 def _parse_single_source_worker(args: Tuple[Dict[str, Any], str, Optional[int]]) -> int:
@@ -214,6 +218,10 @@ def _parse_single_source_worker(args: Tuple[Dict[str, Any], str, Optional[int]])
     s_type = s_info["type"]
     inner_file = s_info.get("inner_file")
     channel = "api_pull" if "phish" in source_name.lower() else ("agent" if "benign" in source_name.lower() or "tranco" in source_name.lower() else "syslog")
+    publisher_split = ""
+    if source_name.lower() == "phishvn_open" and inner_file:
+        member_name = Path(inner_file).name.lower()
+        publisher_split = {"url_train.csv": "train", "url_val.csv": "val", "url_test.csv": "test"}.get(member_name, "")
 
     count = 0
     with open(part_out, "w", encoding="utf-8", buffering=8*1024*1024) as fout:
@@ -221,9 +229,9 @@ def _parse_single_source_worker(args: Tuple[Dict[str, Any], str, Optional[int]])
             if s_type == "parquet":
                 count = _process_parquet(f_path, fout, source_name, channel, limit)
             elif s_type == "rar" and inner_file:
-                count = _process_rar(f_path, inner_file, fout, source_name, channel, limit)
+                count = _process_rar(f_path, inner_file, fout, source_name, channel, limit, publisher_split)
             elif s_type == "zip" and inner_file:
-                count = _process_zip(f_path, inner_file, fout, source_name, channel, limit)
+                count = _process_zip(f_path, inner_file, fout, source_name, channel, limit, publisher_split)
             elif s_type == "json":
                 count = _process_json(f_path, fout, source_name, channel, limit)
             elif s_type == "excel":
@@ -273,8 +281,9 @@ def _process_parquet(f_path: Path, fout, source_name: str, channel: str, limit: 
             m = IP_RE.search(u)
             ip = m.group(0) if m else ""
             clean_u = u.replace('"', '""')
+            clean_raw_lbl = str(raw_l if raw_l is not None else "").replace('"', '""')
             clean_lbl = lbl.replace('"', '""')
-            fout.write(f'"{clean_u}","{clean_lbl}","{clean_u}","{clean_lbl}","{ip}","{channel}","{source_name}"\n')
+            fout.write(f'"{clean_u}","{clean_raw_lbl}","{clean_u}","{clean_lbl}","{ip}","{channel}","{source_name}",""\n')
             count += 1
             if limit and count >= limit:
                 break
@@ -283,12 +292,12 @@ def _process_parquet(f_path: Path, fout, source_name: str, channel: str, limit: 
 
     return count
 
-def _process_rar(f_path: Path, inner_file: str, fout, source_name: str, channel: str, limit: Optional[int]) -> int:
+def _process_rar(f_path: Path, inner_file: str, fout, source_name: str, channel: str, limit: Optional[int], publisher_split: str = "") -> int:
     tar_exe = shutil.which("tar")
     if tar_exe:
         proc = subprocess.Popen([tar_exe, "-xOf", str(f_path), inner_file], stdout=subprocess.PIPE, bufsize=8*1024*1024)
         fin = io.TextIOWrapper(proc.stdout, encoding="utf-8", errors="ignore")
-        count = _process_stream(fin, fout, source_name, channel, limit)
+        count = _process_stream(fin, fout, source_name, channel, limit, publisher_split)
         try:
             proc.kill()
         except Exception:
@@ -297,13 +306,13 @@ def _process_rar(f_path: Path, inner_file: str, fout, source_name: str, channel:
     elif rarfile:
         with rarfile.RarFile(str(f_path)) as rf, rf.open(inner_file) as bf:
             fin = io.TextIOWrapper(bf, encoding="utf-8", errors="ignore")
-            return _process_stream(fin, fout, source_name, channel, limit)
+            return _process_stream(fin, fout, source_name, channel, limit, publisher_split)
     return 0
 
-def _process_zip(f_path: Path, inner_file: str, fout, source_name: str, channel: str, limit: Optional[int]) -> int:
+def _process_zip(f_path: Path, inner_file: str, fout, source_name: str, channel: str, limit: Optional[int], publisher_split: str = "") -> int:
     with zipfile.ZipFile(f_path, "r") as zf, zf.open(inner_file) as bf:
         fin = io.TextIOWrapper(bf, encoding="utf-8", errors="ignore")
-        return _process_stream(fin, fout, source_name, channel, limit)
+        return _process_stream(fin, fout, source_name, channel, limit, publisher_split)
 
 def _process_json(f_path: Path, fout, source_name: str, channel: str, limit: Optional[int]) -> int:
     count = 0
@@ -321,8 +330,9 @@ def _process_json(f_path: Path, fout, source_name: str, channel: str, limit: Opt
                     m = IP_RE.search(str(u))
                     ip = m.group(0) if m else ""
                     clean_u = str(u).strip().replace('"', '""')
+                    clean_raw_lbl = str(lbl_raw).replace('"', '""')
                     clean_lbl = lbl.replace('"', '""')
-                    fout.write(f'"{clean_u}","{clean_lbl}","{clean_u}","{clean_lbl}","{ip}","{channel}","{source_name}"\n')
+                    fout.write(f'"{clean_u}","{clean_raw_lbl}","{clean_u}","{clean_lbl}","{ip}","{channel}","{source_name}",""\n')
                     count += 1
                     if limit and count >= limit:
                         break
@@ -335,7 +345,7 @@ def _process_json(f_path: Path, fout, source_name: str, channel: str, limit: Opt
 
 def _process_excel(f_path: Path, fout, source_name: str, channel: str, limit: Optional[int]) -> int:
     if not pd:
-        return 0
+        raise RuntimeError("Can cai pandas va openpyxl de doc tep Excel")
     count = 0
     try:
         df = pd.read_excel(f_path, nrows=limit)
@@ -360,16 +370,17 @@ def _process_excel(f_path: Path, fout, source_name: str, channel: str, limit: Op
             m = IP_RE.search(u)
             ip = m.group(0) if m else ""
             clean_u = u.replace('"', '""')
+            clean_raw_lbl = lbl_raw.replace('"', '""')
             clean_lbl = lbl.replace('"', '""')
-            fout.write(f'"{clean_u}","{clean_lbl}","{clean_u}","{clean_lbl}","{ip}","{channel}","{source_name}"\n')
+            fout.write(f'"{clean_u}","{clean_raw_lbl}","{clean_u}","{clean_lbl}","{ip}","{channel}","{source_name}",""\n')
             count += 1
             if limit and count >= limit:
                 break
-    except Exception:
-        pass
+    except Exception as exc:
+        raise RuntimeError(f"Khong the doc tep Excel {f_path}: {exc}") from exc
     return count
 
-def _process_stream(fin, fout, source_name: str, channel: str, limit: Optional[int]) -> int:
+def _process_stream(fin, fout, source_name: str, channel: str, limit: Optional[int], publisher_split: str = "") -> int:
     import itertools
 
     first_line = fin.readline()
@@ -385,6 +396,7 @@ def _process_stream(fin, fout, source_name: str, channel: str, limit: Optional[i
     has_header = any(name in url_names for name in names)
     url_idx = next((i for i, name in enumerate(names) if name in url_names), 0)
     label_idx = next((i for i, name in enumerate(names) if name in label_names and i != url_idx), -1)
+    split_idx = next((i for i, name in enumerate(names) if name in {"source_split", "split"}), -1)
     writer = csv.writer(fout)
     count = 0
 
@@ -399,7 +411,8 @@ def _process_stream(fin, fout, source_name: str, channel: str, limit: Optional[i
             raw_lbl = fields[label_idx] if 0 <= label_idx < len(fields) else ""
             lbl = _map_label(raw_lbl, source_name)
             match = IP_RE.search(u)
-            writer.writerow([u, lbl, u, lbl, match.group(0) if match else "", channel, source_name])
+            split = publisher_split or (fields[split_idx].strip().lower() if 0 <= split_idx < len(fields) else "")
+            writer.writerow([u, raw_lbl, u, lbl, match.group(0) if match else "", channel, source_name, split])
             count += 1
             if limit and count >= limit:
                 break
@@ -410,7 +423,7 @@ def _process_stream(fin, fout, source_name: str, channel: str, limit: Optional[i
             u, lbl, ip = _parse_line_general(line, source_name)
             if len(u) < 3 or any(c in u for c in "\r\n"):
                 continue
-            writer.writerow([u, lbl, u, lbl, ip, channel, source_name])
+            writer.writerow([u, lbl, u, lbl, ip, channel, source_name, publisher_split])
             count += 1
             if limit and count >= limit:
                 break
@@ -525,7 +538,7 @@ def run_parsing(
 
     with open(out_path, "w", encoding="utf-8", newline="") as fout:
         writer = csv.writer(fout)
-        writer.writerow(["url_raw", "label_raw", "url", "label", "_aic211_ipv4", "channel", "source"])
+        writer.writerow(["url_raw", "label_raw", "url", "label", "_aic211_ipv4", "channel", "source", "source_split"])
         total_written = 0
         for pf in part_files:
             if pf.exists():

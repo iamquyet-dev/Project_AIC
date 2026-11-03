@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+
+csv.field_size_limit(16 * 1024 * 1024)
 import gc
+import hashlib
 import json
 import logging
 import os
@@ -46,6 +49,14 @@ MODEL_CONFIGS = {
         "file": "model_lexical_logistic.joblib",
     },
 }
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb", buffering=16*1024*1024) as handle:
+        for block in iter(lambda: handle.read(16*1024*1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 def build_pipeline(model_key: str) -> Pipeline:
     if model_key == "logistic_tfidf":
@@ -114,10 +125,12 @@ def train_single_model(
     output_dir: Path,
     chunk_size: int = 200000,
     is_incremental: bool = False,
+    training_info: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     cfg = MODEL_CONFIGS[model_key]
     out_file = output_dir / cfg["file"]
-    mode_str = "Huan luyen tang tien" if (is_incremental and out_file.exists()) else "Huan luyen moi"
+    incremental_used = bool(is_incremental and out_file.exists())
+    mode_str = "Huan luyen tang tien" if incremental_used else "Huan luyen moi"
     print(f"\n{mode_str} [{cfg['name']}] tren {len(urls):,} mau...")
     t0 = time.time()
 
@@ -125,14 +138,16 @@ def train_single_model(
     y_indices = np.array([cls_to_idx[lbl] for lbl in labels], dtype=np.int32)
     all_class_indices = np.arange(len(CLASSES))
 
-    if is_incremental and out_file.exists():
+    if incremental_used:
         saved_obj = joblib.load(out_file)
+        previous_training = saved_obj.get("training_info") if isinstance(saved_obj, dict) else None
         pipe = saved_obj["pipeline"]
         feat_step = pipe.named_steps["features"]
         clf_step = pipe.named_steps["classifier"]
         scaler_step = pipe.named_steps.get("scaler")
         print(f"  -> Da nap trong so mo hinh cu tu {out_file.name} de tiep tuc hoc.")
     else:
+        previous_training = None
         pipe = build_pipeline(model_key)
         feat_step = pipe.named_steps["features"]
         clf_step = pipe.named_steps["classifier"]
@@ -220,6 +235,13 @@ def train_single_model(
         "classes": CLASSES,
         "label_encoder": None,
         "model_name": model_key,
+        "training_info": {
+            **(training_info or {}),
+            "model_key": model_key,
+            "incremental": incremental_used,
+            "previous_training": previous_training,
+            "lineage_complete": bool(training_info and training_info.get("split_verified") and (not incremental_used or (previous_training and previous_training.get("lineage_complete")))),
+        },
     }
     joblib.dump(save_data, out_file, compress=3)
     web_dir = Path(__file__).resolve().parent.parent / "web" / "models"
@@ -262,6 +284,32 @@ def run_train(
         raise ValueError("Tap train khong co mau hop le")
     print(f"Da nap {len(urls):,} mau URL hop le thuoc {len(set(labels))} lop.")
 
+    train_hash = _file_sha256(in_path)
+    manifest_path = DATA_PROCESSED_DIR / "dataset_version.json"
+    try:
+        split_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        split_manifest = {}
+    split_verified = (
+        samples is None
+        and in_path.resolve() == (DATA_PROCESSED_DIR / "train.csv").resolve()
+        and split_manifest.get("integrity_verified") is True
+        and split_manifest.get("splits", {}).get("train", {}).get("sha256") == train_hash
+        and split_manifest.get("splits", {}).get("train", {}).get("rows") == len(urls)
+    )
+    training_info = {
+        "train_path": str(in_path.resolve()),
+        "train_sha256": train_hash,
+        "train_bytes": in_path.stat().st_size,
+        "rows_loaded": len(urls),
+        "samples_requested": samples,
+        "split_version": split_manifest.get("version") if split_verified else None,
+        "split_manifest_sha256": _file_sha256(manifest_path) if split_verified else None,
+        "split_verified": split_verified,
+        "training_code_sha256": _file_sha256(Path(__file__)),
+        "extractor_code_sha256": _file_sha256(Path(__file__).resolve().parent.parent / "url_detector" / "extractor.py"),
+    }
+
     dist = {}
     for lbl in labels:
         dist[lbl] = dist.get(lbl, 0) + 1
@@ -275,7 +323,7 @@ def run_train(
     saved_paths = []
 
     for key in targets:
-        info = train_single_model(key, urls, labels, out_d, is_incremental=is_incremental)
+        info = train_single_model(key, urls, labels, out_d, is_incremental=is_incremental, training_info=training_info)
         summary_list.append(info)
         saved_paths.append(info["path"])
 

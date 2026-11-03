@@ -52,8 +52,94 @@ async function fetchStatus() {
     state.models = data.models || [];
     renderModelDropdown();
     renderModelsList();
+    renderDatasetSummary(data.dataset_summary || {});
   } catch (err) {
     console.error('Lỗi nạp thông tin trạng thái:', err);
+    renderDatasetSummary({ verified: false, reason: 'Không kết nối được tới máy chủ.' });
+  }
+}
+
+function renderDatasetSummary(summary) {
+  const note = document.getElementById('dataset-summary-note');
+  const distribution = document.getElementById('class-distribution');
+  if (!summary.verified) {
+    note.textContent = summary.reason || 'Chưa xác minh phiên bản dữ liệu.';
+    for (const id of ['dataset-total', 'dataset-classes', 'dataset-train', 'dataset-test']) {
+      document.getElementById(id).textContent = '—';
+    }
+    distribution.textContent = 'Chưa hiển thị phân bố vì metadata không khớp dữ liệu hiện tại.';
+    return;
+  }
+
+  const splits = summary.splits || {};
+  const totals = {};
+  for (const split of Object.values(splits)) {
+    for (const [label, count] of Object.entries(split.class_distribution || {})) {
+      totals[label] = (totals[label] || 0) + Number(count);
+    }
+  }
+  const format = (value) => Number(value || 0).toLocaleString('vi-VN');
+  note.textContent = `Phiên bản ${summary.version || 'không tên'} — số liệu từ manifest chia tập đã đối chiếu file.`;
+  document.getElementById('dataset-total').textContent = format(summary.total_rows);
+  document.getElementById('dataset-classes').textContent = format(Object.keys(totals).length);
+  document.getElementById('dataset-train').textContent = format(splits.train?.rows);
+  document.getElementById('dataset-test').textContent = format(splits.test?.rows);
+  distribution.innerHTML = '';
+  for (const [label, count] of Object.entries(totals)) {
+    const row = document.createElement('div');
+    row.className = 'dist-row';
+    const labelElement = document.createElement('span');
+    labelElement.textContent = `${CLASS_NAME_MAP[label] || label}: ${format(count)} dòng`;
+    row.appendChild(labelElement);
+    distribution.appendChild(row);
+  }
+}
+
+async function fetchMetrics() {
+  const note = document.getElementById('metrics-note');
+  const body = document.getElementById('metrics-body');
+  try {
+    const response = await fetch('/api/metrics');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const report = await response.json();
+    if (!Array.isArray(report.models) || !report.models.length) throw new Error('Chưa có báo cáo đánh giá.');
+    const rows = Number(report.total_rows || 0).toLocaleString('vi-VN');
+    const verified = report.provenance_verified === true;
+    note.textContent = `${report.dataset || 'Tập chưa rõ'} · ${rows} URL · ${report.timestamp || 'không rõ ngày'}. ${verified ? 'Đã đối chiếu phiên bản mô hình và dữ liệu.' : 'Chưa xác minh khớp phiên bản mô hình/dữ liệu; không dùng để kết luận học vẹt.'}`;
+    body.innerHTML = '';
+    const featureNames = {
+      svm: 'Word + char n-grams (3-5 ký tự)',
+      logistic_tfidf: 'Word TF-IDF',
+      logistic_lexical: '11 đặc trưng cấu trúc (Lexical)',
+    };
+    const modelIds = {
+      svm: 'model_word_char_svm',
+      logistic_tfidf: 'model_word_tfidf_logistic',
+      logistic_lexical: 'model_lexical_logistic',
+    };
+    const percent = (value) => `${(Number(value || 0) * 100).toFixed(2)}%`;
+    for (const model of report.models) {
+      const row = document.createElement('tr');
+      const modelInfo = state.models.find((item) => item.id === modelIds[model.model_key]);
+      for (const value of [
+        model.name || model.model_key,
+        featureNames[model.model_key] || 'Không rõ',
+        percent(model.accuracy),
+        percent(model.precision_weighted),
+        percent(model.recall_weighted),
+        percent(model.weighted_f1),
+        percent(model.macro_f1),
+        modelInfo?.file_size_human || '—',
+      ]) {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        row.appendChild(cell);
+      }
+      body.appendChild(row);
+    }
+  } catch (err) {
+    note.textContent = `Không thể hiển thị báo cáo: ${err.message}`;
+    body.innerHTML = '<tr><td colspan="8">Chưa có số liệu đánh giá hợp lệ.</td></tr>';
   }
 }
 
@@ -100,6 +186,8 @@ function renderModelsList() {
 }
 
 async function selectModel(modelId) {
+  const scanButton = document.getElementById('btn-scan');
+  scanButton.disabled = true;
   try {
     const res = await fetch('/api/models/select', {
       method: 'POST',
@@ -112,10 +200,14 @@ async function selectModel(modelId) {
       renderModelDropdown();
       renderModelsList();
     } else {
+      renderModelDropdown();
       alert(`Lỗi: ${data.error}`);
     }
   } catch (err) {
+    renderModelDropdown();
     alert(`Lỗi kết nối: ${err.message}`);
+  } finally {
+    scanButton.disabled = false;
   }
 }
 
@@ -218,7 +310,7 @@ function renderResults(data) {
         </div>
         <div class="result-metrics">
           <div class="metric-gauge-val" style="color: ${item.verdict_color};">${item.risk_percent}%</div>
-          <div class="metric-gauge-label">Mức nguy hại</div>
+          <div class="metric-gauge-label">Điểm mô hình (chưa hiệu chuẩn)</div>
         </div>
       </div>
 
@@ -374,4 +466,4 @@ document.getElementById('form-import-dataset').addEventListener('submit', async 
 });
 
 // Khoi tao khi tai trang
-fetchStatus();
+fetchStatus().then(fetchMetrics);

@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import csv
+
+csv.field_size_limit(16 * 1024 * 1024)
 import ipaddress
 import logging
 import math
@@ -100,7 +102,7 @@ FEATURE_COLUMNS = [
     "_aic211_source_row", "url", "label", "url_length", "hostname_length",
     "path_length", "entropy", "digit_ratio", "special_ratio", "dot_count",
     "hyphen_count", "slash_count", "hostname_is_ip", "uses_https",
-    "suspicious_token_count", "tld", "channel", "source",
+    "suspicious_token_count", "tld", "channel", "source", "source_split",
 ]
 
 
@@ -127,7 +129,7 @@ def _feature_values(row: Dict[str, str]) -> List[Any]:
         url.count("."), url.count("-"), url.count("/"),
         int(is_ip_address(host)), int(scheme == "https"),
         sum(url.lower().count(token) for token in SUSPICIOUS_TOKENS),
-        parse_tld(host), row.get("channel", ""), row.get("source", ""),
+        parse_tld(host), row.get("channel", ""), row.get("source", ""), row.get("source_split", ""),
     ]
 
 

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+
+csv.field_size_limit(16 * 1024 * 1024)
+import hashlib
 from datetime import datetime, timezone
 import json
 import logging
 import math
 import os
 from pathlib import Path
+import random
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -107,7 +111,15 @@ def save_confusion_matrix_plot(model_key: str, metrics: Dict[str, Any]) -> None:
     except Exception as e:
         print(f"  -> Khong the xuat anh ma tran: {e}")
 
-def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, total_count: int, dist: Dict[str, int]) -> None:
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb", buffering=16*1024*1024) as handle:
+        for block in iter(lambda: handle.read(16*1024*1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, total_count: int, dist: Dict[str, int], provenance: Optional[Dict[str, Any]] = None) -> None:
     if not results:
         return
 
@@ -128,6 +140,8 @@ def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, tot
             "latency_ms": r.get("latency_ms", 0.0),
             "per_class": r.get("per_class", {}),
             "confusion_matrix": r.get("confusion_matrix", []),
+            "model_sha256": r.get("model_sha256"),
+            "training_info": r.get("training_info"),
             "accuracy_ci95": r.get("accuracy_ci95", []),
             "threat_detection_rate": r.get("threat_detection_rate", 0.0),
             "false_benign_alarm_rate": r.get("false_benign_alarm_rate", 0.0),
@@ -142,6 +156,8 @@ def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, tot
         "total_rows": total_count,
         "classes": CLASSES,
         "class_distribution": dist,
+        "provenance_verified": bool(provenance and provenance.get("verified")),
+        "provenance": provenance or {"verified": False, "reason": "Báo cáo cũ không có manifest."},
         "models": models_summary,
         "plots": {name: f"outputs/figures/{aliases[0]}" for name, aliases in MODEL_FILE_ALIASES.items()},
     }
@@ -219,6 +235,7 @@ def evaluate_single_model(
     urls: List[str],
     y_true: List[str],
     batch_size: int = 50000,
+    save_plot: bool = True,
 ) -> Dict[str, Any]:
     entry = runtime.load_model(model_name)
     pipe = entry["pipeline"]
@@ -280,10 +297,83 @@ def evaluate_single_model(
 
     metrics["model"] = model_name
     metrics["latency_ms"] = latency
+    metrics["training_info"] = entry.get("training_info")
+    model_path = entry.get("path")
+    metrics["model_sha256"] = _file_sha256(Path(model_path)) if model_path and Path(model_path).is_file() else None
 
-    save_confusion_matrix_plot(model_name, metrics)
+    if save_plot:
+        save_confusion_matrix_plot(model_name, metrics)
 
     return metrics
+
+def sample_split_uniformly(path: Path, sample_size: int, seed: int) -> Tuple[List[str], List[str], int]:
+    if sample_size <= 0:
+        raise ValueError("So mau moi tap phai duong")
+    rng = random.Random(seed)
+    urls: List[str] = []
+    labels: List[str] = []
+    valid_rows = 0
+    with open(path, "r", encoding="utf-8-sig", errors="ignore", newline="", buffering=16*1024*1024) as handle:
+        reader = csv.DictReader(handle)
+        fields = {field.strip().lower(): field for field in (reader.fieldnames or [])}
+        if "url" not in fields or "label" not in fields:
+            raise ValueError(f"CSV thieu cot url/label: {path}")
+        for row in reader:
+            url = (row.get(fields["url"]) or "").strip()
+            label = (row.get(fields["label"]) or "").strip().lower()
+            if not url or label not in CLASSES:
+                continue
+            valid_rows += 1
+            if len(urls) < sample_size:
+                urls.append(url)
+                labels.append(label)
+            else:
+                selected = rng.randrange(valid_rows)
+                if selected < sample_size:
+                    urls[selected] = url
+                    labels[selected] = label
+    return urls, labels, valid_rows
+
+
+def run_generalization_audit(model_name: str = "all", samples_per_split: int = 100000, seed: int = 42) -> Dict[str, Any]:
+    """Compare frozen models on uniform samples of train, val and test."""
+    paths = {name: DATA_PROCESSED_DIR / f"{name}.csv" for name in ("train", "val", "test")}
+    for path in paths.values():
+        if not path.is_file():
+            raise FileNotFoundError(path)
+    runtime = ModelRuntime.get_instance()
+    targets = list(MODEL_REGISTRY) if model_name == "all" else [model_name]
+    report: Dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "sample_policy": "Uniform reservoir over all valid rows of each split; diagnostic only",
+        "samples_per_split": samples_per_split,
+        "seed": seed,
+        "independent_domain_or_source_holdout": False,
+        "model_lineage_complete": {
+            key: bool((runtime.load_model(key).get("training_info") or {}).get("lineage_complete"))
+            for key in targets
+        },
+        "splits": {},
+        "models": {},
+    }
+    for name, path in paths.items():
+        urls, labels, valid_rows = sample_split_uniformly(path, samples_per_split, seed)
+        report["splits"][name] = {"valid_rows": valid_rows, "sampled_rows": len(urls)}
+        for key in targets:
+            result = evaluate_single_model(runtime, key, urls, labels, save_plot=False)
+            report["models"].setdefault(key, {})[name] = {
+                "accuracy": result["accuracy"],
+                "weighted_f1": result["weighted_f1"],
+                "macro_f1": result["macro_f1"],
+                "per_class": result["per_class"],
+            }
+    for scores in report["models"].values():
+        scores["train_test_f1_gap"] = round(scores["train"]["weighted_f1"] - scores["test"]["weighted_f1"], 4)
+        scores["train_val_f1_gap"] = round(scores["train"]["weighted_f1"] - scores["val"]["weighted_f1"], 4)
+    METRICS_DIR.mkdir(parents=True, exist_ok=True)
+    (METRICS_DIR / "generalization_audit.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report
+
 
 def run_evaluate(
     test_file: Optional[str] = None,
@@ -331,7 +421,36 @@ def run_evaluate(
         for r in results:
             print(f"{r['model']:<20} | {r['accuracy']*100:>8.2f}% | {r['precision_weighted']*100:>8.2f}% | {r['recall_weighted']*100:>8.2f}% | {r['weighted_f1']*100:>8.2f}%")
 
-    save_summary_reports(results, test_path.name, len(urls), dist)
+    dataset_hash = _file_sha256(test_path)
+    manifest_path = DATA_PROCESSED_DIR / "dataset_version.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        manifest = {}
+    manifest_hash = _file_sha256(manifest_path) if manifest_path.is_file() else None
+    split_name = test_path.stem if test_path.parent.resolve() == DATA_PROCESSED_DIR.resolve() else None
+    dataset_matches = bool(
+        split_name in ("train", "val", "test")
+        and manifest.get("integrity_verified") is True
+        and manifest.get("splits", {}).get(split_name, {}).get("sha256") == dataset_hash
+    )
+    models_match = all(
+        isinstance(result.get("training_info"), dict)
+        and result["training_info"].get("lineage_complete") is True
+        and result["training_info"].get("split_version") == manifest.get("version")
+        and result["training_info"].get("split_manifest_sha256") == manifest_hash
+        and result["training_info"].get("train_sha256") == manifest.get("splits", {}).get("train", {}).get("sha256")
+        for result in results
+    )
+    provenance = {
+        "verified": dataset_matches and models_match,
+        "split_version": manifest.get("version") if dataset_matches else None,
+        "dataset_sha256": dataset_hash,
+        "dataset_matches_manifest": dataset_matches,
+        "models_match_manifest": models_match,
+        "scope": "Hash/file lineage only; does not establish independence of domains, sources or time.",
+    }
+    save_summary_reports(results, test_path.name, len(urls), dist, provenance)
 
     logger.info(f"Hoan thanh Buoc 08 -> Da danh gia {len(results)} mo hinh tren {len(urls):,} mau kiem thu")
     return results
@@ -390,6 +509,10 @@ if __name__ == "__main__":
         parser.add_argument("-i", "--input", default=None, help="Tep kiem thu (test.csv hoac val.csv)")
         parser.add_argument("-m", "--model", default="all", choices=["logistic_tfidf", "svm", "logistic_lexical", "all"], help="Ten mo hinh")
         parser.add_argument("-s", "--samples", type=int, default=None, help="So luong mau kiem thu")
+        parser.add_argument("--audit-generalization", action="store_true", help="So sanh train/val/test bang mau deu tren toan bo moi tap")
         args = parser.parse_args()
 
-        run_evaluate(test_file=args.input, model_name=args.model, samples=args.samples)
+        if args.audit_generalization:
+            run_generalization_audit(model_name=args.model, samples_per_split=args.samples or 100000)
+        else:
+            run_evaluate(test_file=args.input, model_name=args.model, samples=args.samples)

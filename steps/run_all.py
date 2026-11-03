@@ -1,24 +1,34 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 from pathlib import Path
 import sys
 import time
+
+# Prevent OpenBLAS/MKL/OMP from allocating large thread pools per process in multiprocessing
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 STEPS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = STEPS_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from url_detector.common import setup_logger
-from steps.step_01_collection import run_collection, find_raw_directory
-from steps.step_02_parsing import run_parsing
-from steps.step_03_normalize import run_normalize
-from steps.step_04_clean import run_clean
-from steps.step_05_features import run_features
-from steps.step_06_dataset import run_dataset_split
-from steps.step_07_train import run_train
-from steps.step_08_evaluate import run_evaluate
+def setup_logger(name: str = "QuyTrinh-Steps", level: int = logging.INFO) -> logging.Logger:
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        logger.setLevel(level)
+        handler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter(
+            "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    return logger
 
 logger = setup_logger("QuyTrinh-Steps")
 
@@ -34,34 +44,42 @@ def run_pipeline(
 
     if target_step == "1":
         print("\n> Buoc 01: Kiem tra nguon du lieu raw")
+        from steps.step_01_collection import run_collection
         run_collection(input_path=input_source, sample_size=sample_size)
 
     if target_step in ("all", "2"):
         print("\n> Buoc 02: Tien xu ly URL truc tiep tu raw")
+        from steps.step_02_parsing import run_parsing
         run_parsing(input_path=input_source, max_samples=sample_size)
 
     if target_step in ("all", "3"):
         print("\n> Buoc 03: Chuan hoa")
+        from steps.step_03_normalize import run_normalize
         run_normalize(max_samples=sample_size)
 
     if target_step in ("all", "4"):
         print("\n> Buoc 04: Lam sach")
+        from steps.step_04_clean import run_clean
         run_clean(max_samples=sample_size)
 
     if target_step in ("all", "5"):
         print("\n> Buoc 05: Trich xuat dac trung")
+        from steps.step_05_features import run_features
         run_features(max_samples=sample_size)
 
     if target_step in ("all", "6"):
         print("\n> Buoc 06: Chia dataset")
+        from steps.step_06_dataset import run_dataset_split
         run_dataset_split(input_file=dataset_path, max_samples=sample_size)
 
     if target_step in ("all", "7"):
         print("\n> Buoc 07: Huan luyen mo hinh")
+        from steps.step_07_train import run_train
         run_train(samples=sample_size)
 
     if target_step in ("all", "8"):
         print("\n> Buoc 08: Danh gia mo hinh")
+        from steps.step_08_evaluate import run_evaluate
         run_evaluate(samples=sample_size)
 
     elapsed = round(time.time() - t_start, 2)
@@ -85,38 +103,39 @@ def interactive_menu():
         if choice == "0":
             break
         elif choice == "1":
-            from steps.step_01_collection import prompt_menu_input
+            from steps.step_01_collection import prompt_menu_input, run_collection
             src, s_cnt = prompt_menu_input()
             run_collection(input_path=src, sample_size=s_cnt)
         elif choice == "2":
-            from steps.step_02_parsing import prompt_menu_input as p_p
+            from steps.step_02_parsing import prompt_menu_input as p_p, run_parsing
             in_f, out_f, w, s_cnt = p_p()
             run_parsing(input_path=in_f, output_file=out_f, workers=w, max_samples=s_cnt)
         elif choice == "3":
-            from steps.step_03_normalize import prompt_menu_input as p_n
+            from steps.step_03_normalize import prompt_menu_input as p_n, run_normalize
             in_f, out_f, w, s_cnt = p_n()
             run_normalize(input_file=in_f, output_file=out_f, workers=w, max_samples=s_cnt)
         elif choice == "4":
-            from steps.step_04_clean import prompt_menu_input as p_c
+            from steps.step_04_clean import prompt_menu_input as p_c, run_clean
             in_f, out_f, rej_f, s_cnt = p_c()
             run_clean(input_file=in_f, output_file=out_f, rejected_file=rej_f, max_samples=s_cnt)
         elif choice == "5":
-            from steps.step_05_features import prompt_menu_input as p_f
+            from steps.step_05_features import prompt_menu_input as p_f, run_features
             in_f, out_f, w, s_cnt = p_f()
             run_features(input_file=in_f, output_file=out_f, workers=w, max_samples=s_cnt)
         elif choice == "6":
-            from steps.step_06_dataset import prompt_menu_input as p_ds
+            from steps.step_06_dataset import prompt_menu_input as p_ds, run_dataset_split
             in_f, tr, vr, te, s_cnt = p_ds()
             run_dataset_split(input_file=in_f, train_ratio=tr, val_ratio=vr, test_ratio=te, max_samples=s_cnt)
         elif choice == "7":
-            from steps.step_07_train import prompt_menu_input as p_tr
+            from steps.step_07_train import prompt_menu_input as p_tr, run_train
             in_f, out_d, mdl, s_cnt, inc = p_tr()
             run_train(input_file=in_f, output_dir=out_d, model_choice=mdl, samples=s_cnt, is_incremental=inc)
         elif choice == "8":
-            from steps.step_08_evaluate import prompt_menu_input as p_ev
+            from steps.step_08_evaluate import prompt_menu_input as p_ev, run_evaluate
             in_f, mdl, s_cnt = p_ev()
             run_evaluate(test_file=in_f, model_name=mdl, samples=s_cnt)
         elif choice == "9":
+            from steps.step_01_collection import find_raw_directory
             def_dir = str(find_raw_directory())
             ans_src = input(f"Duong dan raw [Enter={def_dir}]: ").strip()
             target_src = ans_src if ans_src else def_dir

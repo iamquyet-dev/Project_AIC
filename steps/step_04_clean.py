@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+
+csv.field_size_limit(16 * 1024 * 1024)
 import logging
 import os
 from pathlib import Path
@@ -23,6 +25,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_PROCESSED_DIR = BASE_DIR / "data" / "processed"
 
 MISSING_TOKENS = {"nan", "null", "none", "na", "n/a", "<na>", "undefined", "unknown", ""}
+VALID_LABELS = {"benign", "phishing", "malware", "malicious"}
 IP_PATTERN = re.compile(r"\d{1,3}\.\d{1,3}")
 
 def setup_logger(name: str = "Buoc04-LamSach") -> logging.Logger:
@@ -71,13 +74,36 @@ def run_clean(
     rej_path.parent.mkdir(parents=True, exist_ok=True)
 
     started = time.time()
-    counts = {"processed": 0, "cleaned": 0, "missing": 0, "invalid": 0, "duplicate": 0}
+    counts = {"processed": 0, "cleaned": 0, "missing": 0, "invalid": 0, "duplicate": 0, "conflict": 0, "unknown_label": 0}
     with tempfile.TemporaryDirectory(prefix=".clean_index_", dir=out_path.parent) as scratch:
         db = sqlite3.connect(Path(scratch) / "seen.sqlite")
         try:
             db.execute("PRAGMA journal_mode=OFF")
             db.execute("PRAGMA synchronous=OFF")
-            db.execute("CREATE TABLE seen (url TEXT PRIMARY KEY) WITHOUT ROWID")
+            db.execute("CREATE TABLE seen (url TEXT PRIMARY KEY, label TEXT NOT NULL, conflict INTEGER NOT NULL DEFAULT 0, emitted INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID")
+            # Index labels before writing any accepted row, so every conflicting
+            # URL is excluded regardless of which source appeared first.
+            with open(in_path, "r", encoding="utf-8-sig", newline="", buffering=16*1024*1024) as fin:
+                reader = csv.DictReader(fin)
+                if not reader.fieldnames or not {"url", "label"}.issubset(reader.fieldnames):
+                    raise ValueError("CSV Clean can cot url va label")
+                for number, row in enumerate(reader):
+                    if max_samples is not None and number >= max_samples:
+                        break
+                    if None in row:
+                        continue
+                    url = (row.get("url") or "").strip()
+                    label = (row.get("label") or "").strip().lower()
+                    if not is_valid_url(url) or label not in VALID_LABELS:
+                        continue
+                    db.execute(
+                        "INSERT INTO seen(url,label) VALUES (?,?) "
+                        "ON CONFLICT(url) DO UPDATE SET conflict=CASE WHEN label<>excluded.label THEN 1 ELSE conflict END",
+                        (url, label),
+                    )
+                    if number % 50000 == 0:
+                        db.commit()
+            db.commit()
             with open(in_path, "r", encoding="utf-8-sig", newline="", buffering=16*1024*1024) as fin, \
                  open(out_path, "w", encoding="utf-8", newline="", buffering=16*1024*1024) as fout, \
                  open(rej_path, "w", encoding="utf-8", newline="", buffering=4*1024*1024) as frej:
@@ -89,7 +115,9 @@ def run_clean(
                 rejected = csv.DictWriter(frej, fieldnames=[*fields, "_aic211_reject_reason"])
                 accepted.writeheader()
                 rejected.writeheader()
-                for row in reader:
+                for number, row in enumerate(reader):
+                    if max_samples is not None and number >= max_samples:
+                        break
                     counts["processed"] += 1
                     if None in row:
                         reason = "malformed_csv_row"
@@ -100,14 +128,25 @@ def run_clean(
                         if not url or label in MISSING_TOKENS:
                             reason = "missing_url_or_label"
                             counts["missing"] += 1
+                        elif label not in VALID_LABELS:
+                            reason = "unknown_label"
+                            counts["unknown_label"] += 1
                         elif not is_valid_url(url):
                             reason = "invalid_url_format"
                             counts["invalid"] += 1
-                        elif not db.execute("INSERT OR IGNORE INTO seen(url) VALUES (?)", (url,)).rowcount:
-                            reason = "duplicate_url"
-                            counts["duplicate"] += 1
                         else:
-                            reason = ""
+                            state = db.execute("SELECT conflict,emitted FROM seen WHERE url=?", (url,)).fetchone()
+                            if state is None:
+                                raise RuntimeError(f"Khong co URL trong index: {url}")
+                            if state[0]:
+                                reason = "conflicting_labels"
+                                counts["conflict"] += 1
+                            elif state[1]:
+                                reason = "duplicate_url"
+                                counts["duplicate"] += 1
+                            else:
+                                db.execute("UPDATE seen SET emitted=1 WHERE url=?", (url,))
+                                reason = ""
                     if reason:
                         rejected.writerow({**row, "_aic211_reject_reason": reason})
                     else:
@@ -115,15 +154,13 @@ def run_clean(
                         counts["cleaned"] += 1
                     if counts["processed"] % 50000 == 0:
                         db.commit()
-                    if max_samples and counts["cleaned"] >= max_samples:
-                        break
             db.commit()
         finally:
             db.close()
     elapsed = round(time.time() - started, 2)
     logger.info(
-        "Hoan thanh Buoc 04 -> %s dong hop le, %s trung URL, %s thieu, %s sai URL trong %ss: %s",
-        f"{counts['cleaned']:,}", f"{counts['duplicate']:,}", f"{counts['missing']:,}",
+        "Hoan thanh Buoc 04 -> %s dong hop le, %s trung URL, %s xung dot nhan, %s thieu, %s sai URL trong %ss: %s",
+        f"{counts['cleaned']:,}", f"{counts['duplicate']:,}", f"{counts['conflict']:,}", f"{counts['missing']:,}",
         f"{counts['invalid']:,}", elapsed, out_path.name,
     )
     return out_path

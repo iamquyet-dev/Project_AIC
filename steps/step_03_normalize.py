@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+
+csv.field_size_limit(16 * 1024 * 1024)
 from datetime import datetime, timezone
 import json
 import logging
@@ -38,8 +40,9 @@ LABEL_MAPPING = {
     "virus": "malware",
     "trojan": "malware",
     "mal": "malware",
-    "defaced": "defacement",
-    "deface": "defacement",
+    "defacement": "malicious",
+    "defaced": "malicious",
+    "deface": "malicious",
 }
 
 def setup_logger(name: str = "Buoc03-ChuanHoa") -> logging.Logger:
@@ -83,10 +86,11 @@ def _normalize_slice(args: Tuple[str, int, int, str, str]) -> int:
             ipv4 = fields[4] if len(fields) > 4 else ""
             channel = fields[5] if len(fields) > 5 else "agent"
             origin = fields[6] if len(fields) > 6 else "raw"
+            source_split = fields[7] if len(fields) > 7 else ""
             normalized_url = (url or url_raw).strip()
             normalized_label = label.strip().lower()
             normalized_label = LABEL_MAPPING.get(normalized_label, normalized_label)
-            writer.writerow([row_start, normalized_url, normalized_label, ts_now, channel, origin, ipv4])
+            writer.writerow([row_start, normalized_url, normalized_label, ts_now, channel, origin, ipv4, source_split])
             count += 1
     return count
 
@@ -113,7 +117,7 @@ def run_normalize(
     num_workers = workers or DEFAULT_WORKERS
     t0 = time.time()
     ts_now = datetime.now(timezone.utc).isoformat()
-    header = ["_aic211_source_row", "url", "label", "timestamp_utc", "channel", "source", "_aic211_ipv4"]
+    header = ["_aic211_source_row", "url", "label", "timestamp_utc", "channel", "source", "_aic211_ipv4", "source_split"]
 
     print(f"Chuan hoa: {in_path.name} ({round(file_size / (1024*1024), 2)} MB) - {num_workers} tien trinh", flush=True)
 
@@ -128,7 +132,7 @@ def run_normalize(
                 u = (row.get("url") or row.get("url_raw") or "").strip()
                 lbl = row.get("label") or row.get("label_raw") or ""
                 lbl_norm = LABEL_MAPPING.get(lbl.lower().strip(), lbl.lower().strip())
-                writer.writerow([count, u, lbl_norm, ts_now, row.get("channel", "agent"), row.get("source", "raw"), row.get("_aic211_ipv4", "")])
+                writer.writerow([count, u, lbl_norm, ts_now, row.get("channel", "agent"), row.get("source", "raw"), row.get("_aic211_ipv4", ""), row.get("source_split", "")])
                 if count >= max_samples:
                     break
         elapsed = round(time.time() - t0, 2)

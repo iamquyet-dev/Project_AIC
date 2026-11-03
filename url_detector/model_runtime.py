@@ -74,6 +74,7 @@ class ModelRuntime:
                 "classes": list(data.get("classes", [])),
                 "label_encoder": data.get("label_encoder"),
                 "model_name": data.get("model_name", path.stem),
+                "training_info": data.get("training_info"),
                 "path": str(path),
                 "load_time": load_time,
             }
@@ -83,6 +84,7 @@ class ModelRuntime:
                 "classes": getattr(data, "classes_", ["benign", "malicious", "phishing"]),
                 "label_encoder": None,
                 "model_name": path.stem,
+                "training_info": None,
                 "path": str(path),
                 "load_time": load_time,
             }

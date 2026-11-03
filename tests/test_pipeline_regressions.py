@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import StringIO
+import importlib.util
 import csv
 import json
 from pathlib import Path
@@ -23,6 +24,26 @@ from url_detector.thresholded import ThresholdManager
 
 
 class PipelineRegressions(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl is not installed in this interpreter")
+    def test_excel_parsing_preserves_comma_url(self):
+        import openpyxl
+
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            source = root / "source.xlsx"
+            output = root / "parsed.csv"
+            book = openpyxl.Workbook()
+            sheet = book.active
+            sheet.append(["url", "label"])
+            sheet.append(["https://example.test/a,b", "phishing"])
+            book.save(source)
+            with output.open("w", encoding="utf-8", newline="") as handle:
+                count = parsing._process_excel(source, handle, "sample", "agent", None)
+            with output.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.reader(handle))
+            self.assertEqual(count, 1)
+            self.assertEqual(rows[0][:2], ["https://example.test/a,b", "phishing"])
+
     def test_collection_zip_stream_keeps_first_data_row(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
@@ -50,10 +71,10 @@ class PipelineRegressions(unittest.TestCase):
             parsed = root / "parsed.csv"
             with parsed.open("w", encoding="utf-8", newline="") as handle:
                 writer = csv.writer(handle)
-                writer.writerow(["url_raw", "label_raw", "url", "label", "_aic211_ipv4", "channel", "source"])
+                writer.writerow(["url_raw", "label_raw", "url", "label", "_aic211_ipv4", "channel", "source", "source_split"])
                 writer.writerows([
-                    ["https://a.test/a,b", "benign", "https://a.test/a,b", "benign", "", "agent", "first"],
-                    ["https://b.test/", "malware", "https://b.test/", "malware", "", "syslog", "second"],
+                    ["https://a.test/a,b", "benign", "https://a.test/a,b", "benign", "", "agent", "first", ""],
+                    ["https://b.test/", "malware", "https://b.test/", "malware", "", "syslog", "second", ""],
                 ])
             raw = parsed.read_bytes()
             boundary = raw.rfind(b"\n", 0, raw.find(b"https://b.test/")) + 1
@@ -72,24 +93,25 @@ class PipelineRegressions(unittest.TestCase):
             normalized = root / "normalized.csv"
             with normalized.open("w", encoding="utf-8", newline="") as handle:
                 writer = csv.writer(handle)
-                writer.writerow(["_aic211_source_row", "url", "label", "timestamp_utc", "channel", "source", "_aic211_ipv4"])
+                writer.writerow(["_aic211_source_row", "url", "label", "timestamp_utc", "channel", "source", "_aic211_ipv4", "source_split"])
                 writer.writerows(rows)
-                writer.writerow(["9", "https://a.test/a,b", "malicious", "now", "syslog", "other", ""])
+                writer.writerow(["9", "https://a.test/a,b", "malicious", "now", "syslog", "other", "", ""])
             cleaned, rejected = root / "cleaned.csv", root / "rejected.csv"
             clean.run_clean(str(normalized), str(cleaned), str(rejected))
             with cleaned.open(encoding="utf-8", newline="") as handle:
                 accepted_rows = list(csv.DictReader(handle))
             with rejected.open(encoding="utf-8", newline="") as handle:
                 rejected_rows = list(csv.DictReader(handle))
-            self.assertEqual(len(accepted_rows), 2)
-            self.assertEqual(rejected_rows[0]["_aic211_reject_reason"], "duplicate_url")
+            self.assertEqual(len(accepted_rows), 1)
+            self.assertEqual(accepted_rows[0]["url"], "https://b.test/")
+            self.assertEqual([row["_aic211_reject_reason"] for row in rejected_rows], ["conflicting_labels", "conflicting_labels"])
 
             feature_file = root / "features.csv"
             features.run_features(str(cleaned), str(feature_file), max_samples=2)
             with feature_file.open(encoding="utf-8", newline="") as handle:
                 feature_rows = list(csv.DictReader(handle))
-            self.assertEqual(feature_rows[0]["url"], "https://a.test/a,b")
-            self.assertEqual(feature_rows[0]["source"], "first")
+            self.assertEqual(feature_rows[0]["url"], "https://b.test/")
+            self.assertEqual(feature_rows[0]["source"], "second")
             feature_boundary = cleaned.read_bytes().find(b"https://b.test/")
             feature_boundary = cleaned.read_bytes().rfind(b"\n", 0, feature_boundary) + 1
             left, right = root / "features_left.csv", root / "features_right.csv"
@@ -99,7 +121,7 @@ class PipelineRegressions(unittest.TestCase):
                 left_rows = list(csv.reader(handle))
             with right.open(encoding="utf-8", newline="") as handle:
                 right_rows = list(csv.reader(handle))
-            self.assertEqual(len(left_rows) + len(right_rows), 2)
+            self.assertEqual(len(left_rows) + len(right_rows), 1)
 
     def test_split_groups_and_label_ids(self):
         with tempfile.TemporaryDirectory() as root:

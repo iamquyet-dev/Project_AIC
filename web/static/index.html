@@ -39,7 +39,8 @@
     <section id="tab-scanner" class="tab-content active">
       <div class="scanner-hero">
         <h1>Phân loại Nguy cơ URL Đa lớp</h1>
-        <p>Hệ thống nhận diện 5 lớp nhãn: An toàn (Benign), Lừa đảo (Phishing), Mã độc (Malware), Thay đổi giao diện (Defacement), Độc hại (Malicious).</p>
+        <p>Hệ thống phân loại 4 lớp: An toàn (Benign), Lừa đảo (Phishing), Mã độc (Malware), Độc hại (Malicious).</p>
+        <p>Điểm mô hình chưa được hiệu chuẩn; không xem phần trăm là xác suất URL an toàn hay độc hại đã kiểm định.</p>
       </div>
 
       <div class="scanner-box card">
@@ -55,7 +56,6 @@
             <button class="sample-btn" data-sample="https://www.google.com/search?q=cybersecurity">Google (An toàn)</button>
             <button class="sample-btn" data-sample="http://paypal-update-account-verification.online/login.php">PayPal (Lừa đảo)</button>
             <button class="sample-btn" data-sample="http://192.168.1.50/bin/malware_payload.exe">Trojan (Mã độc)</button>
-            <button class="sample-btn" data-sample="http://zone-h.org/mirror/id/35471239">Zone-H (Defacement)</button>
           </div>
           <button id="btn-scan" class="btn btn-primary">
             <span id="btn-scan-text">Phân tích URL</span>
@@ -88,7 +88,7 @@
 
           <form id="form-import-model-path" class="import-form">
             <label><strong>Cách 1: Nhập theo đường dẫn file (.joblib)</strong></label>
-            <input type="text" id="input-model-path" class="input-text" placeholder="E:\AIC211_antigravity\model_output_v4\model_word_char_svm.joblib" value="E:\AIC211_antigravity\model_output_v4\model_word_char_svm.joblib">
+            <input type="text" id="input-model-path" class="input-text" placeholder="Đường dẫn tuyệt đối tới mô hình .joblib trên máy chủ">
             <button type="submit" class="btn btn-secondary">Nạp từ đường dẫn</button>
           </form>
 
@@ -111,38 +111,33 @@
     <section id="tab-dataset" class="tab-content">
       <div class="section-hero">
         <h2>Tập Dữ Liệu và Thống Kê Phân Phối</h2>
-        <p>Thông tin tập dữ liệu tổng hợp 30,640,872 URL và hỗ trợ nạp kiểm tra tệp dữ liệu mới.</p>
+        <p id="dataset-summary-note">Đang đọc thông tin phiên bản dữ liệu...</p>
       </div>
 
       <div class="grid-2col">
         <div class="card">
-          <h3>Tổng quan tập dữ liệu 30.6 triệu URL</h3>
+          <h3>Tổng quan tập dữ liệu</h3>
           <div class="stat-boxes">
             <div class="stat-card">
-              <span class="stat-number">30,640,872</span>
+              <span class="stat-number" id="dataset-total">—</span>
               <span class="stat-desc">Tổng số dòng URL</span>
             </div>
             <div class="stat-card">
-              <span class="stat-number">5</span>
+              <span class="stat-number" id="dataset-classes">4</span>
               <span class="stat-desc">Số lớp nguy cơ</span>
             </div>
             <div class="stat-card">
-              <span class="stat-number">23,722,885</span>
+              <span class="stat-number" id="dataset-train">—</span>
               <span class="stat-desc">Tập huấn luyện (Train)</span>
             </div>
             <div class="stat-card">
-              <span class="stat-number">2,731,595</span>
+              <span class="stat-number" id="dataset-test">—</span>
               <span class="stat-desc">Tập kiểm thử (Test)</span>
             </div>
           </div>
 
           <h4 style="margin-top: 20px; margin-bottom: 10px;">Phân bố các lớp nhãn trong dữ liệu:</h4>
-          <div class="distribution-bars">
-            <div class="dist-row"><span>An toàn (Benign): 16,559,786 dòng (54.0%)</span><div class="bar"><div style="width: 54%; background: #10b981;"></div></div></div>
-            <div class="dist-row"><span>Lừa đảo (Phishing): 7,430,910 dòng (24.3%)</span><div class="bar"><div style="width: 24.3%; background: #ef4444;"></div></div></div>
-            <div class="dist-row"><span>Độc hại (Malicious): 3,490,425 dòng (11.4%)</span><div class="bar"><div style="width: 11.4%; background: #e11d48;"></div></div></div>
-            <div class="dist-row"><span>Mã độc (Malware): 2,850,964 dòng (9.3%)</span><div class="bar"><div style="width: 9.3%; background: #f97316;"></div></div></div>
-          </div>
+          <div class="distribution-bars" id="class-distribution">Chưa có phân bố đã xác minh.</div>
         </div>
 
         <div class="card">
@@ -150,7 +145,7 @@
           <p class="muted">Nhập đường dẫn file để tự động kiểm tra cột nhãn và hiển thị phân bố số liệu.</p>
           <form id="form-import-dataset" class="import-form">
             <label>Đường dẫn file dataset:</label>
-            <input type="text" id="input-dataset-path" class="input-text" placeholder="E:\formats_ready_20261029_021120\unified\export_...\dataset_unified.csv" value="E:\formats_ready_20261029_021120\unified\export_20261030_184412_272903\dataset_unified.csv">
+            <input type="text" id="input-dataset-path" class="input-text" placeholder="Đường dẫn tuyệt đối tới dataset .csv hoặc .parquet trên máy chủ">
             <button type="submit" class="btn btn-secondary">Đọc và phân tích</button>
           </form>
           <div id="dataset-result" class="dataset-preview-box" hidden></div>
@@ -162,7 +157,7 @@
     <section id="tab-metrics" class="tab-content">
       <div class="section-hero">
         <h2>Báo Cáo Đánh Giá & Ma Trận Nhầm Lẫn</h2>
-        <p>Kết quả đánh giá trên tập kiểm thử độc lập gồm 2,731,595 dòng URL.</p>
+        <p id="metrics-note">Đang đọc báo cáo đánh giá...</p>
       </div>
 
       <div class="card">
@@ -180,38 +175,7 @@
               <th>Dung lượng file</th>
             </tr>
           </thead>
-          <tbody>
-            <tr class="highlight-row">
-              <td><strong>1. Linear SVM</strong></td>
-              <td>Word + char n-grams (3-5 ký tự)</td>
-              <td><span class="badge-green">92.13%</span></td>
-              <td><strong>93.16%</strong></td>
-              <td>92.13%</td>
-              <td><strong>92.26%</strong></td>
-              <td>36.19%</td>
-              <td>3.98 MB</td>
-            </tr>
-            <tr>
-              <td><strong>2. Logistic Regression</strong></td>
-              <td>Word TF-IDF</td>
-              <td><span class="badge-blue">87.53%</span></td>
-              <td>87.58%</td>
-              <td>87.52%</td>
-              <td>87.32%</td>
-              <td>32.32%</td>
-              <td>2.34 MB</td>
-            </tr>
-            <tr>
-              <td><strong>3. Logistic Regression</strong></td>
-              <td>11 đặc trưng cấu trúc (Lexical)</td>
-              <td><span class="badge-yellow">77.08%</span></td>
-              <td>85.82%</td>
-              <td>77.08%</td>
-              <td>80.65%</td>
-              <td>29.73%</td>
-              <td>1.9 KB</td>
-            </tr>
-          </tbody>
+          <tbody id="metrics-body"><tr><td colspan="8">Đang đọc báo cáo...</td></tr></tbody>
         </table>
       </div>
 
@@ -251,7 +215,7 @@
   <footer>
     <div class="footer-content">
       <span>Đồ án môn học AIC211 · Phân loại URL độc hại sử dụng Machine Learning</span>
-      <span class="muted">Hệ thống phân loại đa lớp trực tiếp trên mô hình huấn luyện độc lập</span>
+      <span class="muted">Kết quả mô hình hiện tại cần xác minh phiên bản dữ liệu và huấn luyện</span>
     </div>
   </footer>
 
@@ -278,6 +242,6 @@
       if (e.key === 'Escape') closeImageModal();
     });
   </script>
-  <script src="/app.js?v=20261031_3"></script>
+  <script src="/app.js?v=20261103_audit_fix"></script>
 </body>
 </html>

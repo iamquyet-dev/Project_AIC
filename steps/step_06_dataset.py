@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+
+csv.field_size_limit(16 * 1024 * 1024)
 from contextlib import ExitStack
 import hashlib
 from itertools import islice
@@ -62,9 +64,9 @@ LABEL_ALIASES = {
     "virus": "malware",
     "trojan": "malware",
     "exploit": "malware",
-    "defacement": "defacement",
-    "defaced": "defacement",
-    "deface": "defacement",
+    "defacement": "malicious",
+    "defaced": "malicious",
+    "deface": "malicious",
     "malicious": "malicious",
 }
 
@@ -87,14 +89,20 @@ def canonical_group_key(url: str) -> str:
     value = url.strip()
     try:
         parts = urlsplit(value if "://" in value else "//" + value)
-        host = (parts.hostname or "").lower().removeprefix("www.")
-        port = parts.port
+        host = (parts.hostname or "").lower().rstrip(".").removeprefix("www.")
     except ValueError:
-        return value
+        return f"raw:{value.lower()}"
     if not host:
-        return value
-    path = parts.path.rstrip("/") or "/"
-    return f"{host}:{port or ''}{path}?{parts.query}"
+        return f"raw:{value.lower()}"
+    return f"host:{host}"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb", buffering=16*1024*1024) as handle:
+        for block in iter(lambda: handle.read(16*1024*1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _hash_fraction(value: str) -> float:
@@ -238,16 +246,24 @@ def run_dataset_split(
         "version": f"v_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_file": str(in_path),
+        "source_sha256": _file_sha256(in_path),
+        "source_bytes": in_path.stat().st_size,
+        "schema": out_header,
         "total_rows": counts["total"],
         "skipped_rows": skipped,
-        "split_policy": "SHA256(seed, URL without scheme/www/trailing slash); publisher test > val > train pins take precedence",
+        "split_policy": "SHA256(seed, exact hostname without www/trailing dot); publisher test > val > train pins take precedence when source_split exists",
+        "source_split_present": split_idx is not None,
         "shuffle_policy": "16 disk buckets per split, shuffled in bounded 10000-row blocks",
+        "integrity_verified": True,
         "seed": seed,
         "splits": {
             name: {
                 "rows": counts[name],
                 "ratio": round(counts[name] / max(1, counts["total"]), 4),
                 "class_distribution": class_dist[name],
+                "sha256": _file_sha256(paths[name]),
+                "bytes": paths[name].stat().st_size,
+                "modified_ns": paths[name].stat().st_mtime_ns,
             }
             for name in paths
         },

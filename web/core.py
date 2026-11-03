@@ -251,10 +251,7 @@ class ModelRegistry:
     def get_model(self, key: str | None = None) -> dict:
         target_key = key or self.active_model_key
         if target_key not in self.available_models:
-            if self.available_models:
-                target_key = list(self.available_models.keys())[0]
-            else:
-                raise RuntimeError("Chưa có mô hình nào được nạp trong hệ thống.")
+            raise ValueError(f"Không tìm thấy mô hình: {target_key}")
 
         if target_key not in self.models_cache:
             m_path = Path(self.available_models[target_key]["path"])
@@ -269,10 +266,6 @@ class ModelRegistry:
                 classes = getattr(pipe, "classes_", ["benign", "malicious"])
                 model_name = self.available_models[target_key]["name"]
 
-            clf = getattr(pipe, "named_steps", {}).get("classifier", pipe)
-            if hasattr(clf, "classes_") and len(clf.classes_) == len(classes):
-                clf.classes_ = np.array(classes)
-
             self.models_cache[target_key] = {
                 "pipeline": pipe,
                 "classes": list(classes),
@@ -284,8 +277,8 @@ class ModelRegistry:
 
     def set_active_model(self, key: str):
         if key in self.available_models:
-            self.active_model_key = key
             self.get_model(key)
+            self.active_model_key = key
             return True
         return False
 
@@ -350,7 +343,7 @@ def predict_urls(urls: list[str], model_key: str | None = None) -> list[dict]:
         benign_prob = round(prob_dist.get("benign", 0.0) + prob_dist.get("0", 0.0), 4)
         risk_score = round(float(max(0.0, 1.0 - benign_prob)), 4)
 
-        if predicted_class in ("benign", "0") or risk_score < 0.40:
+        if predicted_class in ("benign", "0"):
             risk_level = "safe"
             verdict_text = "AN TOÀN (BENIGN)"
             verdict_color = "#10b981"
@@ -373,6 +366,7 @@ def predict_urls(urls: list[str], model_key: str | None = None) -> list[dict]:
             "verdict_color": verdict_color,
             "risk_score": risk_score,
             "risk_percent": round(risk_score * 100, 1),
+            "score_calibrated": False,
             "risk_level": risk_level,
             "probabilities": prob_dist,
             "classes": [str(c) for c in classes],

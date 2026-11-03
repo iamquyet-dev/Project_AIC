@@ -57,8 +57,32 @@ STATIC_DIR = ROOT / "static"
 REPORTS_DIR = ROOT / "reports"
 METRICS_DIR = ROOT.parent / "outputs" / "metrics"
 FIGURES_DIR = ROOT.parent / "outputs" / "figures"
+DATASET_VERSION = ROOT.parent / "data" / "processed" / "dataset_version.json"
 
 UPLOADS_DIR.mkdir(exist_ok=True)
+
+
+def load_dataset_summary():
+    if not DATASET_VERSION.is_file():
+        return {"verified": False, "reason": "Chưa có metadata chia tập dữ liệu."}
+    try:
+        metadata = json.loads(DATASET_VERSION.read_text(encoding="utf-8"))
+        splits = metadata.get("splits", {})
+        current = bool(metadata.get("integrity_verified"))
+        for name in ("train", "val", "test"):
+            path = DATASET_VERSION.parent / f"{name}.csv"
+            info = splits.get(name, {})
+            if not path.is_file() or info.get("bytes") != path.stat().st_size or info.get("modified_ns") != path.stat().st_mtime_ns:
+                current = False
+        return {
+            "verified": current,
+            "reason": "Metadata chưa xác minh với các file chia tập hiện tại." if not current else "",
+            "version": metadata.get("version"),
+            "total_rows": metadata.get("total_rows"),
+            "splits": splits,
+        }
+    except (OSError, ValueError, TypeError):
+        return {"verified": False, "reason": "Không đọc được metadata chia tập dữ liệu."}
 
 
 class WebAppHandler(BaseHTTPRequestHandler):
@@ -101,21 +125,13 @@ class WebAppHandler(BaseHTTPRequestHandler):
         path = url_parts.path
 
         if path == "/api/status":
-            summary_path = METRICS_DIR / "multiclass_summary.json"
-            if not summary_path.is_file():
-                summary_path = REPORTS_DIR / "multiclass_summary.json"
-            summary_data = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.is_file() else {}
             self.send_json(200, {
                 "status": "ready",
                 "active_model": REGISTRY.active_model_key,
                 "models": REGISTRY.list_models(),
                 "class_labels": CLASS_LABELS,
                 "class_colors": CLASS_COLORS,
-                "dataset_summary": {
-                    "total_rows": summary_data.get("total_rows", 0),
-                    "classes": summary_data.get("classes", ["benign", "malicious", "phishing", "malware"]),
-                    "class_distribution": summary_data.get("class_distribution", {}),
-                }
+                "dataset_summary": load_dataset_summary(),
             })
             return
 
@@ -191,6 +207,12 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 if isinstance(urls, str):
                     urls = [urls]
                 model_key = data.get("model_id") or REGISTRY.active_model_key
+                if model_key not in REGISTRY.available_models:
+                    self.send_json(400, {"error": f"Không tìm thấy mô hình: {model_key}"})
+                    return
+                if not isinstance(urls, list) or not 1 <= len(urls) <= 50 or any(not isinstance(u, str) or len(u) > 4096 for u in urls):
+                    self.send_json(400, {"error": "Cần 1 đến 50 URL hợp lệ, mỗi URL tối đa 4096 ký tự."})
+                    return
 
                 t0 = time.time()
                 results = predict_urls(urls, model_key)

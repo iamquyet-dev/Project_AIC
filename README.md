@@ -144,6 +144,8 @@ Project_AIC/
 
 Có thể kiểm tra khác biệt scheme, path, độ dài URL và nguồn theo lớp bằng lệnh `python steps/diagnose_bias.py data/processed/train.csv --max-rows 10000`. Kết quả từ 10.000 dòng đầu chỉ là chẩn đoán mẫu, không đại diện toàn bộ dữ liệu.
 
+**Trạng thái sau rà soát 03/11/2026:** Báo cáo JSON hiện có ghi Accuracy test 80,45% (SVM), 73,90% (TF-IDF) và 59,08% (lexical) trên 6.484.817 URL. Những mô hình và CSV này được tạo trước khi sửa quy trình gán nhãn, loại nhãn xung đột, chia theo hostname và lưu provenance. Vì vậy web hiển thị điểm JSON với cảnh báo chưa xác minh phiên bản; chưa được kết luận mô hình có hay không học vẹt. Cần tạo lại dữ liệu, huấn luyện, đánh giá và đối chiếu train/validation/test trên cùng manifest trước khi công bố điểm mới. Bước đánh giá mới có tùy chọn `--audit-generalization` để lấy mẫu đều từ toàn bộ từng tập và xuất chênh lệch train–val/test; phép này chỉ là chẩn đoán, không thay thế kiểm tra trên domain/nguồn/thời gian mới.
+
 ### Đánh giá chất lượng nhận diện (Mô hình Linear SVM):
 - **Benign (An toàn)**: Đạt F1-Score **87.6%** (Độ chính xác 86.0%, độ phủ 89.2% trên 3.423.772 link).
 - **Phishing (Lừa đảo)**: Đạt F1-Score **80.7%** (Độ chính xác 85.1%, độ phủ 76.8% trên 2.115.471 link).
