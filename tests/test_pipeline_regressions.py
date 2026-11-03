@@ -133,7 +133,7 @@ class PipelineRegressions(unittest.TestCase):
                 writer.writerows([
                     ["http://www.same.test/path/", "benign", "999", ""],
                     ["https://same.test/path", "malware", "999", "test"],
-                    ["https://other.test", "defacement", "999", ""],
+                    ["https://other.test", "unknown", "999", ""],
                     ["https://alias.test", "bad", "999", "train"],
                 ])
             with patch.object(dataset, "DATA_PROCESSED_DIR", root):

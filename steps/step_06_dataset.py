@@ -1,24 +1,27 @@
 from __future__ import annotations
 
 import argparse
-import csv
-
-csv.field_size_limit(16 * 1024 * 1024)
+import concurrent.futures
 from contextlib import ExitStack
+import csv
+from datetime import datetime, timezone
 import hashlib
 from itertools import islice
-import math
-import sqlite3
-import tempfile
-from urllib.parse import urlsplit
-from datetime import datetime, timezone
 import json
 import logging
+import math
 from pathlib import Path
 import random
 import sys
+import tempfile
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
+
+try:
+    csv.field_size_limit(128 * 1024 * 1024)
+except Exception:
+    csv.field_size_limit(2147483647)
 
 if sys.platform == "win32":
     try:
@@ -96,7 +99,6 @@ def canonical_group_key(url: str) -> str:
         return f"raw:{value.lower()}"
     return f"host:{host}"
 
-
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb", buffering=16*1024*1024) as handle:
@@ -104,15 +106,12 @@ def _file_sha256(path: Path) -> str:
             digest.update(block)
     return digest.hexdigest()
 
-
 def _hash_fraction(value: str) -> float:
     return int.from_bytes(hashlib.sha256(value.encode("utf-8")).digest()[:8], "big") / 2**64
-
 
 def _split_name(key: str, seed: int, train_ratio: float, val_ratio: float) -> str:
     fraction = _hash_fraction(f"{seed}:split:{key}")
     return "train" if fraction < train_ratio else ("val" if fraction < train_ratio + val_ratio else "test")
-
 
 def run_dataset_split(
     input_file: Optional[str] = None,
@@ -139,6 +138,11 @@ def run_dataset_split(
     class_dist = {name: {} for name in paths}
     skipped = {"invalid_url": 0, "unknown_label": 0, "malformed_row": 0}
 
+    in_size_mb = round(in_path.stat().st_size / (1024 * 1024), 2)
+    s_label = f"{max_samples:,}" if max_samples else "toan bo"
+    print(f"\nBuoc 06: Phan chia tap du lieu ({in_path.name} - {in_size_mb} MB, mau: {s_label})", flush=True)
+    print(f"Ty le chia: Train {int(train_ratio*100)}% - Val {int(val_ratio*100)}% - Test {int(test_ratio*100)}% (Seed={seed})", flush=True)
+
     with tempfile.TemporaryDirectory(prefix=".split_", dir=DATA_PROCESSED_DIR) as scratch:
         scratch = Path(scratch)
         with open(in_path, "r", encoding="utf-8-sig", newline="", buffering=16*1024*1024) as source_file:
@@ -154,38 +158,39 @@ def run_dataset_split(
             raise ValueError("CSV can cot URL va label ro rang")
         id_idx = lowered.index("label_id") if "label_id" in lowered else None
         out_header = list(header) if id_idx is not None else [*header, "label_id"]
-        overrides = None
+
+        pins: Dict[str, int] = {}
         if split_idx is not None:
-            overrides = sqlite3.connect(scratch / "publisher_splits.sqlite")
-            overrides.execute("PRAGMA journal_mode=OFF")
-            overrides.execute("PRAGMA synchronous=OFF")
-            overrides.execute("CREATE TABLE pins (key TEXT PRIMARY KEY, rank INTEGER) WITHOUT ROWID")
+            print("-> [1/4] Kiem tra va ghim nhan goc cua publisher vao RAM...", flush=True)
             ranks = {"test": 0, "validation": 1, "val": 1, "train": 2}
             with open(in_path, "r", encoding="utf-8-sig", newline="", buffering=16*1024*1024) as fin:
                 reader = csv.reader(fin)
-                next(reader)
+                next(reader, None)
                 for number, row in enumerate(reader):
                     if max_samples is not None and number >= max_samples:
                         break
                     if len(row) != len(header) or not row[url_idx].strip():
                         continue
-                    rank = ranks.get(row[split_idx].strip().lower())
+                    split_val = row[split_idx].strip().lower()
+                    if not split_val:
+                        continue
+                    rank = ranks.get(split_val)
                     if rank is not None:
                         key = canonical_group_key(row[url_idx])
-                        overrides.execute(
-                            "INSERT INTO pins(key,rank) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET rank=min(rank,excluded.rank)",
-                            (key, rank),
-                        )
-                    if number % 50000 == 0:
-                        overrides.commit()
-            overrides.commit()
+                        curr = pins.get(key)
+                        if curr is None or rank < curr:
+                            pins[key] = rank
+            print(f"  -> Da ghim {len(pins):,} domain/key vao RAM.", flush=True)
 
+        print("-> [2/4] Phan nhom URL theo domain/host va dua vao cac bucket...", flush=True)
+        t_split0 = time.time()
+        split_cache: Dict[str, str] = {}
         with ExitStack() as stack:
             buckets = {}
             writers = {}
             with open(in_path, "r", encoding="utf-8-sig", newline="", buffering=16*1024*1024) as fin:
                 reader = csv.reader(fin)
-                next(reader)
+                next(reader, None)
                 for number, row in enumerate(reader):
                     if max_samples is not None and number >= max_samples:
                         break
@@ -202,8 +207,15 @@ def run_dataset_split(
                         continue
                     row[label_idx] = label
                     key = canonical_group_key(url)
-                    pinned = overrides.execute("SELECT rank FROM pins WHERE key=?", (key,)).fetchone() if overrides else None
-                    target = ("test", "val", "train")[pinned[0]] if pinned else _split_name(key, seed, train_ratio, val_ratio)
+                    target = split_cache.get(key)
+                    if target is None:
+                        pinned_rank = pins.get(key) if pins else None
+                        if pinned_rank is not None:
+                            target = ("test", "val", "train")[pinned_rank]
+                        else:
+                            target = _split_name(key, seed, train_ratio, val_ratio)
+                        split_cache[key] = target
+
                     if id_idx is None:
                         row = [*row, str(LABEL_IDS[label])]
                     else:
@@ -212,18 +224,22 @@ def run_dataset_split(
                     bucket_key = (target, bucket)
                     if bucket_key not in writers:
                         shard = scratch / f"{target}_{bucket:02d}.csv"
-                        handle = stack.enter_context(open(shard, "w", encoding="utf-8", newline=""))
+                        handle = stack.enter_context(open(shard, "w", encoding="utf-8", newline="", buffering=1024*1024))
                         buckets[bucket_key] = shard
                         writers[bucket_key] = csv.writer(handle)
                     writers[bucket_key].writerow(row)
                     counts[target] += 1
                     counts["total"] += 1
                     class_dist[target][label] = class_dist[target].get(label, 0) + 1
-        if overrides:
-            overrides.close()
+                    if number > 0 and number % 500000 == 0:
+                        s_sec = round(time.time() - t_split0, 1)
+                        spd = int(number / max(s_sec, 0.1))
+                        print(f"   Da phan chia {number:,} dong ({spd:,} dong/s) -> Train: {counts['train']:,} | Val: {counts['val']:,} | Test: {counts['test']:,}...", flush=True)
 
+        print("-> [3/4] Xao tron du lieu theo khoi va xuat file train/val/test...", flush=True)
         rng = random.Random(seed)
         for target, output in paths.items():
+            print(f"   Dang xuat {output.name} ({counts[target]:,} dong)...", flush=True)
             with open(output, "w", encoding="utf-8", newline="", buffering=8*1024*1024) as fout:
                 writer = csv.writer(fout)
                 writer.writerow(out_header)
@@ -233,7 +249,7 @@ def run_dataset_split(
                     shard = buckets.get((target, bucket))
                     if shard is None:
                         continue
-                    with open(shard, "r", encoding="utf-8", newline="") as fin:
+                    with open(shard, "r", encoding="utf-8", newline="", buffering=1024*1024) as fin:
                         reader = csv.reader(fin)
                         while True:
                             block = list(islice(reader, 10000))
@@ -242,11 +258,18 @@ def run_dataset_split(
                             rng.shuffle(block)
                             writer.writerows(block)
 
+    print("-> [4/4] Tinh ma bam SHA-256 song song va tao dataset_version.json...", flush=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        future_in = executor.submit(_file_sha256, in_path)
+        future_splits = {name: executor.submit(_file_sha256, paths[name]) for name in paths}
+        in_sha256 = future_in.result()
+        split_hashes = {name: future.result() for name, future in future_splits.items()}
+
     version_metadata = {
         "version": f"v_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_file": str(in_path),
-        "source_sha256": _file_sha256(in_path),
+        "source_sha256": in_sha256,
         "source_bytes": in_path.stat().st_size,
         "schema": out_header,
         "total_rows": counts["total"],
@@ -261,7 +284,7 @@ def run_dataset_split(
                 "rows": counts[name],
                 "ratio": round(counts[name] / max(1, counts["total"]), 4),
                 "class_distribution": class_dist[name],
-                "sha256": _file_sha256(paths[name]),
+                "sha256": split_hashes[name],
                 "bytes": paths[name].stat().st_size,
                 "modified_ns": paths[name].stat().st_mtime_ns,
             }
@@ -271,6 +294,8 @@ def run_dataset_split(
     with open(DATA_PROCESSED_DIR / "dataset_version.json", "w", encoding="utf-8") as handle:
         json.dump(version_metadata, handle, ensure_ascii=False, indent=2)
     elapsed = round(time.time() - started, 2)
+    avg_speed = int(counts["total"] / max(elapsed, 0.1))
+    print(f"  -> Hoan tat trong {elapsed}s ({avg_speed:,} dong/s): Train={counts['train']:,} | Val={counts['val']:,} | Test={counts['test']:,}\n", flush=True)
     logger.info("Hoan thanh Buoc 06 -> %s dong trong %ss: train=%s val=%s test=%s",
                 f"{counts['total']:,}", elapsed, f"{counts['train']:,}", f"{counts['val']:,}", f"{counts['test']:,}")
     return version_metadata

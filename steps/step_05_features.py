@@ -4,7 +4,7 @@ import argparse
 from collections import Counter
 import csv
 
-csv.field_size_limit(16 * 1024 * 1024)
+csv.field_size_limit(128 * 1024 * 1024)
 import ipaddress
 import logging
 import math

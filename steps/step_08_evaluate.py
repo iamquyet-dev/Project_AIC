@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 
-csv.field_size_limit(16 * 1024 * 1024)
+csv.field_size_limit(128 * 1024 * 1024)
 import hashlib
 from datetime import datetime, timezone
 import json
