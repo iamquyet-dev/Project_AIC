@@ -1,0 +1,4 @@
+Model,Accuracy,Precision_Weighted,Recall_Weighted,Weighted_F1,Macro_Precision,Macro_Recall,Macro_F1,Latency_ms
+"1. Linear SVM (Word + Char n-grams)",80.30%,80.72%,80.30%,80.32%,69.34%,70.43%,69.66%,0.2900 ms
+"2. Logistic Regression (TF-IDF)",73.50%,73.71%,73.50%,72.59%,60.10%,60.63%,59.10%,0.0500 ms
+"3. Logistic Regression (Lexical)",57.00%,57.25%,57.00%,57.06%,42.36%,42.44%,42.32%,0.1000 ms

@@ -81,9 +81,12 @@ def save_confusion_matrix_plot(model_key: str, metrics: Dict[str, Any]) -> None:
         fig.tight_layout()
 
         aliases = MODEL_FILE_ALIASES.get(model_key, [f"cm_{model_key}.png"])
+        date_folder = time.strftime("%Y-%m-%d")
         dest_dirs = [
             FIGURES_DIR,
+            FIGURES_DIR / date_folder,
             PROJECT_ROOT / "web" / "reports",
+            PROJECT_ROOT / "web" / "reports" / date_folder,
             Path("E:/AIC211_web/reports"),
         ]
 
@@ -94,7 +97,7 @@ def save_confusion_matrix_plot(model_key: str, metrics: Dict[str, Any]) -> None:
                     fig.savefig(d / fname, dpi=150)
 
         plt.close(fig)
-        print(f"  -> Da cap nhat bieu do ma tran: {aliases[-1]}")
+        print(f"  -> Da cap nhat bieu do ma tran: {aliases[-1]} (ghi de va luu vao thu muc {date_folder})")
     except Exception as e:
         print(f"  -> Khong the xuat anh ma tran: {e}")
 
@@ -103,6 +106,7 @@ def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, tot
         return
 
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%S+07:00")
+    date_folder = time.strftime("%Y-%m-%d")
     models_summary = []
     for r in results:
         m_key = r.get("model", "")
@@ -138,7 +142,9 @@ def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, tot
 
     metrics_dirs = [
         METRICS_DIR,
+        METRICS_DIR / date_folder,
         PROJECT_ROOT / "web" / "reports",
+        PROJECT_ROOT / "web" / "reports" / date_folder,
         Path("E:/AIC211_web/reports"),
     ]
     for md in metrics_dirs:
@@ -168,7 +174,9 @@ def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, tot
 
     table_dirs = [
         TABLES_DIR,
+        TABLES_DIR / date_folder,
         PROJECT_ROOT / "web" / "reports",
+        PROJECT_ROOT / "web" / "reports" / date_folder,
         Path("E:/AIC211_web/reports"),
     ]
     for td in table_dirs:
@@ -177,7 +185,7 @@ def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, tot
             (td / "models_comparison.csv").write_text(csv_content, encoding="utf-8")
             (td / "models_comparison.md").write_text(md_content, encoding="utf-8")
 
-    print("\nDa dong bo bao cao JSON va bang so sanh vao outputs/ va web/reports/")
+    print(f"\nDa dong bo bao cao JSON va bang so sanh vao outputs/ (ghi de goc va folder ngay {date_folder})")
 
 def load_test_samples(test_path: Path, max_samples: Optional[int] = None) -> Tuple[List[str], List[str]]:
     urls: List[str] = []
