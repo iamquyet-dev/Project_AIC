@@ -1,7 +1,7 @@
-# Bảng So Sánh Hiệu Năng 3 Mô Hình AIC211 (Đầy đủ Precision, Recall, F1)
+# Bang So Sanh Hieu Nang Cac Mo Hinh AIC211
 
-| Mô hình | Đặc trưng | Accuracy | Precision (Weighted) | Recall (Weighted) | Weighted-F1 | Precision (Macro) | Recall (Macro) | Macro-F1 | Dung lượng | Thời gian Train |
-|---|---|---|---|---|---|---|---|---|---|---|
-| **1. Linear SVM** | Word + char n-grams (3-5 ký tự) | **92.13%** | 93.16% | 92.13% | **92.26%** | 42.45% | 34.46% | 36.19% | 3.98 MB | 105.66 phút |
-| **2. Logistic Regression** | Word TF-IDF | **87.53%** | 87.58% | 87.52% | **87.32%** | 35.85% | 31.45% | 32.32% | 2.34 MB | 24.86 phút |
-| **3. Logistic Regression** | 11 đặc trưng cấu trúc (Lexical) | **77.08%** | 85.82% | 77.08% | **80.65%** | 31.47% | 28.71% | 29.73% | 1.9 KB | 57.59 phút |
+| Mo hinh | Accuracy | Precision (Weighted) | Recall (Weighted) | Weighted-F1 | Do tre (ms/URL) |
+|---|---|---|---|---|---|
+| **1. Linear SVM (Word + Char n-grams)** | 80.30% | 80.72% | 80.30% | 80.32% | 0.2900 ms |
+| **2. Logistic Regression (TF-IDF)** | 73.50% | 73.71% | 73.50% | 72.59% | 0.0500 ms |
+| **3. Logistic Regression (Lexical)** | 57.00% | 57.25% | 57.00% | 57.06% | 0.1000 ms |
