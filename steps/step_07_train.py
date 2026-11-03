@@ -62,7 +62,7 @@ def build_pipeline(model_key: str) -> Pipeline:
     if model_key == "logistic_tfidf":
         return Pipeline([
             ("features", TfidfVectorizer(analyzer="word", ngram_range=(1, 2), max_features=50000, sublinear_tf=True, stop_words=["http", "https", "www"])),
-            ("classifier", SGDClassifier(loss="log_loss", penalty="l2", alpha=1e-5, max_iter=25, tol=1e-3, random_state=42)),
+            ("classifier", SGDClassifier(loss="log_loss", penalty="l2", alpha=1e-5, max_iter=25, tol=1e-3, random_state=42, n_jobs=-1)),
         ])
     elif model_key == "svm":
         union = FeatureUnion([
@@ -71,13 +71,13 @@ def build_pipeline(model_key: str) -> Pipeline:
         ])
         return Pipeline([
             ("features", union),
-            ("classifier", SGDClassifier(loss="modified_huber", penalty="l2", alpha=1e-5, max_iter=25, tol=1e-3, random_state=42)),
+            ("classifier", SGDClassifier(loss="modified_huber", penalty="l2", alpha=1e-5, max_iter=25, tol=1e-3, random_state=42, n_jobs=-1)),
         ])
     elif model_key == "logistic_lexical":
         return Pipeline([
             ("features", LexicalFeatureExtractor()),
             ("scaler", StandardScaler()),
-            ("classifier", SGDClassifier(loss="log_loss", penalty="l2", alpha=1e-4, max_iter=25, tol=1e-3, random_state=42)),
+            ("classifier", SGDClassifier(loss="log_loss", penalty="l2", alpha=1e-4, max_iter=25, tol=1e-3, random_state=42, n_jobs=-1)),
         ])
     else:
         raise ValueError(f"Khong ro cau hinh mo hinh: {model_key}")
