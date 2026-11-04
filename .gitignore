@@ -59,3 +59,4 @@ runs_original_backup/
 !docs/SOURCE_LABEL_POLICY_2026-11-04.md
 *.cmd
 /test case
+!BAO_CAO_CUOI_KY_AIC211.md
