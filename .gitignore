@@ -54,3 +54,4 @@ data/
 *.7z
 *.md
 *.cmd
+/test case
