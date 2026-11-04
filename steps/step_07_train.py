@@ -7,6 +7,7 @@ csv.field_size_limit(128 * 1024 * 1024)
 import gc
 import hashlib
 import json
+import importlib.metadata
 import logging
 import os
 from pathlib import Path
@@ -37,15 +38,15 @@ logger = setup_logger("Buoc07-HuanLuyen")
 
 MODEL_CONFIGS = {
     "logistic_tfidf": {
-        "name": "Logistic Regression TF-IDF",
+        "name": "SGDClassifier log_loss (Word TF-IDF)",
         "file": "model_word_tfidf_logistic.joblib",
     },
     "svm": {
-        "name": "Linear SVM (Word + Char n-grams)",
+        "name": "SGDClassifier modified_huber (Word + Char n-grams)",
         "file": "model_word_char_svm.joblib",
     },
     "logistic_lexical": {
-        "name": "Logistic Regression Lexical",
+        "name": "SGDClassifier log_loss (Lexical)",
         "file": "model_lexical_logistic.joblib",
     },
 }
@@ -245,7 +246,7 @@ def train_single_model(
     }
     joblib.dump(save_data, out_file, compress=3)
     web_dir = Path(__file__).resolve().parent.parent / "web" / "models"
-    if web_dir.exists() and out_file.parent.resolve() != web_dir.resolve():
+    if not os.environ.get("AIC_RUN_DIR") and web_dir.exists() and out_file.parent.resolve() != web_dir.resolve():
         joblib.dump(save_data, web_dir / out_file.name, compress=3)
     elapsed = round(time.time() - t0, 2)
     speed = int(len(urls) / max(elapsed, 0.1))
@@ -302,6 +303,11 @@ def run_train(
         "train_sha256": train_hash,
         "train_bytes": in_path.stat().st_size,
         "rows_loaded": len(urls),
+        "seed": 42,
+        "python": sys.executable,
+        "python_version": sys.version.split()[0],
+        "sklearn_version": importlib.metadata.version("scikit-learn"),
+        "numpy_version": np.__version__,
         "samples_requested": samples,
         "split_version": split_manifest.get("version") if split_verified else None,
         "split_manifest_sha256": _file_sha256(manifest_path) if split_verified else None,

@@ -55,10 +55,10 @@ if sys.platform == "win32":
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_RAW_DIR = BASE_DIR / "data" / "raw"
-DATA_PROCESSED_DIR = BASE_DIR / "data" / "processed"
+DATA_PROCESSED_DIR = Path(os.environ["AIC_RUN_DIR"]).resolve() / "processed" if os.environ.get("AIC_RUN_DIR") else BASE_DIR / "data" / "processed"
 
 CPU_COUNT = os.cpu_count() or 4
-DEFAULT_WORKERS = min(16, max(1, CPU_COUNT - 2))
+try:    from . import safe_default_workers, resource_logexcept ImportError:    from __init__ import safe_default_workers, resource_logDEFAULT_WORKERS = safe_default_workers()
 
 IP_RE = re.compile(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b")
 
@@ -95,7 +95,7 @@ def discover_raw_sources(raw_dir: Path) -> List[Dict[str, Any]]:
         if not f.is_file() or f.name.startswith((".", "__")):
             continue
         nl = f.name.lower()
-        if nl in SKIP_METADATA or nl.startswith(("publisher_", "catalog_", "manifest_")):
+        if nl in SKIP_METADATA or nl.endswith(".source.json") or nl.startswith(("publisher_", "catalog_", "manifest_")):
             continue
         if "snippet" in nl or "all_html" in nl:
             continue
@@ -194,23 +194,22 @@ def discover_raw_sources(raw_dir: Path) -> List[Dict[str, Any]]:
 
     return sources
 
-def _map_label(val: Any, source_name: str) -> str:
+def _map_label(val: Any, source_name: str) -> str:    if source_name.lower() in {        "tranco_domain_ranking", "majestic_domain_ranking", "domainradar_2024_partial",        "kaggle_domain_features", "kaggle_malicious_websites", "tamal_phishing_detection",        "uci_phishing_websites", "uci_website_phishing", "phishing_database_snapshot",    }:        return "unknown"
     vl = str(val).lower().strip().strip('"').strip("'")
-    if vl in ("0", "0.0", "benign", "safe", "ham", "good", "legitimate"):
+    if vl in ("benign", "safe", "ham", "good", "legitimate"):
         return "benign"
-    elif vl in ("1", "1.0", "bad", "malicious", "mal"):
-        return "phishing" if "phish" in source_name.lower() else "malicious"
+    elif vl == "malicious":        return "malicious"
     elif vl in ("phishing", "phish"):
         return "phishing"
     elif vl in ("malware", "trojan", "virus"):
         return "malware"
     elif vl in ("defacement", "defaced", "deface"):
-        return "defacement"
+        return "malicious"
 
     # Only feeds explicitly documented as single-class may supply a missing label.
     # Popularity rankings (Tranco/Majestic) do not establish a benign label.
     s_low = source_name.lower()
-    if s_low in {"openphish_snapshot", "phishing_database_snapshot"}:
+    if s_low == "openphish_snapshot" and not vl:
         return "phishing"
     return "unknown"
 
@@ -227,7 +226,7 @@ def _parse_single_source_worker(args: Tuple[Dict[str, Any], str, Optional[int]])
         publisher_split = {"url_train.csv": "train", "url_val.csv": "val", "url_test.csv": "test"}.get(member_name, "")
 
     count = 0
-    with open(part_out, "w", encoding="utf-8", buffering=8*1024*1024) as fout:
+    with open(part_out, "w", encoding="utf-8", newline="", buffering=8*1024*1024) as fout:
         try:
             if s_type == "parquet":
                 count = _process_parquet(f_path, fout, source_name, channel, limit)
@@ -515,7 +514,7 @@ def run_parsing(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
-    num_workers = workers or DEFAULT_WORKERS
+    num_workers = workers or DEFAULT_WORKERS    logger.info(resource_log(num_workers))
 
     if target.is_file():
         ext = target.suffix.lower()
@@ -559,22 +558,13 @@ def run_parsing(
 
     with open(out_path, "w", encoding="utf-8", newline="") as fout:
         writer = csv.writer(fout)
-        writer.writerow(["url_raw", "label_raw", "url", "label", "_aic211_ipv4", "channel", "source", "source_split"])
+        writer.writerow(["url_raw", "label_raw", "url", "label", "_aic211_ipv4", "channel", "source", "source_split", "source_observed_utc", "retrieved_utc", "verification_status"])
         total_written = 0
-        for pf in part_files:
+        for pf, source_info in zip(part_files, sources):
             if pf.exists():
-                with open(pf, "r", encoding="utf-8", newline="") as pfin:
-                    if max_samples is None:
-                        shutil.copyfileobj(pfin, fout, length=16 * 1024 * 1024)
-                    else:
-                        for row in csv.reader(pfin):
-                            if total_written >= max_samples:
-                                break
-                            writer.writerow(row)
-                            total_written += 1
+                with open(pf, "r", encoding="utf-8", newline="") as pfin:                    sidecar = Path(source_info["path"] + ".source.json")                    try:                        retrieved = json.loads(sidecar.read_text(encoding="utf-8")).get("retrieved_utc", "")                    except (OSError, ValueError):                        retrieved = ""                    for row in csv.reader(pfin):                        if not row:                            continue                        if max_samples is not None and total_written >= max_samples:                            break                        writer.writerow([*row, "", retrieved, "unverified"])                        total_written += 1
                 pf.unlink()
-    if max_samples is not None:
-        total_parsed = total_written
+    total_parsed = total_written
 
     try:
         temp_dir.rmdir()
@@ -621,6 +611,45 @@ def prompt_menu_input() -> Tuple[Optional[str], Optional[str], Optional[int], Op
 
     return in_file, default_out, workers, max_rows
 
+INVENTORY_ROOT = Path(__file__).resolve().parent.parentANALYSIS_ONLY = {"tranco_domain_ranking", "majestic_domain_ranking", "domainradar_2024_partial",                 "kaggle_domain_features", "kaggle_malicious_websites", "tamal_phishing_detection",
+                 "uci_phishing_websites", "uci_website_phishing", "phishing_database_snapshot"}
+
+
+def build_source_inventory() -> None:
+    out = INVENTORY_ROOT / "docs" / "source_label_inventory.csv"
+    out.parent.mkdir(exist_ok=True)
+    rows = []
+    for folder in sorted((INVENTORY_ROOT / "data" / "raw").iterdir()):
+        if not folder.is_dir():
+            continue
+        metadata_files = sorted(folder.glob("*.source.json"))
+        kinds = set()
+        urls = set()
+        retrieved = set()
+        for path in metadata_files:
+            metadata = json.loads(path.read_text(encoding="utf-8"))
+            kinds.add(str(metadata.get("data_kind", "unknown")))
+            urls.add(str(metadata.get("source", metadata.get("url", ""))))
+            if metadata.get("retrieved_utc"):
+                retrieved.add(metadata["retrieved_utc"])
+        if folder.name in ANALYSIS_ONLY:
+            policy = "analysis_only_no_url_label_ground_truth"
+        elif folder.name == "openphish_snapshot":
+            policy = "phishing_url_snapshot_source_rule"
+        else:
+            policy = "review_source_label_semantics_before_final_training"
+        rows.append({"source": folder.name, "data_kind_from_local_metadata": "; ".join(sorted(kinds)),
+                     "source_documentation": "; ".join(sorted(urls)), "retrieved_utc": "; ".join(sorted(retrieved)),
+                     "policy": policy, "source_timestamp_verified": "no", "url_label_reviewed": "no"})
+    with out.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Wrote {len(rows)} source groups to {out}")
+
+
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 1:
         in_file, out_file, workers, max_rows = prompt_menu_input()
@@ -631,6 +660,10 @@ if __name__ == "__main__":
         parser.add_argument("-o", "--output", default=None, help="Tep dau ra csv")
         parser.add_argument("-w", "--workers", type=int, default=DEFAULT_WORKERS, help=f"So tien trinh (mac dinh {DEFAULT_WORKERS})")
         parser.add_argument("-s", "--samples", type=int, default=None, help="Gioi han so dong")
+        parser.add_argument("--source-inventory", action="store_true", help="Ghi kiem ke metadata nguon raw")
         args = parser.parse_args()
 
-        run_parsing(input_path=args.input, output_file=args.output, workers=args.workers, max_samples=args.samples)
+        if args.source_inventory:
+            build_source_inventory()
+        else:
+            run_parsing(input_path=args.input, output_file=args.output, workers=args.workers, max_samples=args.samples)

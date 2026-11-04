@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -14,6 +15,7 @@ from urllib.parse import urlsplit
 
 import joblib
 import numpy as np
+from web.risk_policy import RISK_THRESHOLD, risk_decision
 from sklearn.base import BaseEstimator, TransformerMixin
 
 ROOT = Path(__file__).resolve().parent
@@ -183,21 +185,21 @@ class ModelRegistry:
     def _discover_models(self):
         default_specs = {
             "model_word_char_svm": {
-                "name": "Word + char n-grams · Linear SVM",
+                "name": "Word + char · SGD modified_huber",
                 "file": "model_word_char_svm.joblib",
-                "desc": "Mô hình Linear SVM kết hợp từ vựng và chuỗi n-gram ký tự (3-5 ký tự).",
+                "desc": "SGDClassifier loss=modified_huber với word và char n-gram (3-5 ký tự).",
                 "type": "svm",
             },
             "model_word_tfidf_logistic": {
-                "name": "Word TF-IDF · Logistic Regression",
+                "name": "Word TF-IDF · SGD log_loss",
                 "file": "model_word_tfidf_logistic.joblib",
-                "desc": "Mô hình Hồi quy Logistic kết hợp đặc trưng tần suất từ vựng TF-IDF.",
+                "desc": "SGDClassifier loss=log_loss với word TF-IDF.",
                 "type": "logistic",
             },
             "model_lexical_logistic": {
-                "name": "Lexical features · Logistic Regression",
+                "name": "Lexical · SGD log_loss",
                 "file": "model_lexical_logistic.joblib",
-                "desc": "Mô hình Hồi quy Logistic huấn luyện trên 11 đặc trưng cấu trúc URL.",
+                "desc": "SGDClassifier loss=log_loss trên 11 đặc trưng cấu trúc URL.",
                 "type": "lexical",
             },
         }
@@ -271,6 +273,7 @@ class ModelRegistry:
                 "classes": list(classes),
                 "name": model_name,
                 "key": target_key,
+                "sha256": hashlib.sha256(m_path.read_bytes()).hexdigest(),
             }
 
         return self.models_cache[target_key]
@@ -331,6 +334,7 @@ def predict_urls(urls: list[str], model_key: str | None = None) -> list[dict]:
         probs = exp_d / exp_d.sum(axis=-1, keepdims=True)
 
     results = []
+    scanned_at = datetime.now(timezone.utc).isoformat()
     for i, url in enumerate(clean_urls):
         row_probs = probs[i]
         top_idx = int(np.argmax(row_probs))
@@ -340,19 +344,17 @@ def predict_urls(urls: list[str], model_key: str | None = None) -> list[dict]:
         for c_idx, c_name in enumerate(classes):
             prob_dist[str(c_name)] = round(float(row_probs[c_idx]), 4)
 
-        benign_prob = round(prob_dist.get("benign", 0.0) + prob_dist.get("0", 0.0), 4)
-        risk_score = round(float(max(0.0, 1.0 - benign_prob)), 4)
+        benign_prob = sum(float(row_probs[c_idx]) for c_idx, c_name in enumerate(classes) if str(c_name) in ("benign", "0"))
+        raw_risk_score, risk_flag, risk_level = risk_decision(benign_prob)
+        risk_score = round(raw_risk_score, 4)
 
-        if predicted_class in ("benign", "0"):
-            risk_level = "safe"
-            verdict_text = "AN TOÀN (BENIGN)"
+        if risk_level == "safe":
+            verdict_text = "NGUY CƠ THẤP (điểm mô hình)"
             verdict_color = "#10b981"
-        elif risk_score < 0.65:
-            risk_level = "suspicious"
-            verdict_text = "NGHI VẤN (" + predicted_class.upper() + ")"
+        elif risk_level == "suspicious":
+            verdict_text = "CẦN KIỂM TRA (" + predicted_class.upper() + ")"
             verdict_color = "#f59e0b"
         else:
-            risk_level = "dangerous"
             verdict_text = "ĐỘC HẠI (" + predicted_class.upper() + ")"
             verdict_color = "#ef4444"
 
@@ -367,11 +369,17 @@ def predict_urls(urls: list[str], model_key: str | None = None) -> list[dict]:
             "risk_score": risk_score,
             "risk_percent": round(risk_score * 100, 1),
             "score_calibrated": False,
+            "score_kind": "uncalibrated_model_score",
+            "risk_threshold": RISK_THRESHOLD,
+            "risk_flag": risk_flag,
             "risk_level": risk_level,
             "probabilities": prob_dist,
             "classes": [str(c) for c in classes],
             "details": token_info,
             "model_name": model_obj["name"],
+            "model_id": model_obj["key"],
+            "model_sha256": model_obj["sha256"],
+            "scanned_at_utc": scanned_at,
         })
 
     return results

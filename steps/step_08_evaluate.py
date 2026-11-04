@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter, defaultdict
+from urllib.parse import urlsplit
 import csv
 
 csv.field_size_limit(128 * 1024 * 1024)
@@ -35,9 +37,9 @@ from url_detector.model_runtime import ModelRuntime
 logger = setup_logger("Buoc08-DanhGia")
 
 MODEL_DISPLAY_NAMES = {
-    "svm": "1. Linear SVM (Word + Char n-grams)",
-    "logistic_tfidf": "2. Logistic Regression (TF-IDF)",
-    "logistic_lexical": "3. Logistic Regression (Lexical)",
+    "svm": "1. SGD modified_huber (Word + Char n-grams)",
+    "logistic_tfidf": "2. SGD log_loss (TF-IDF)",
+    "logistic_lexical": "3. SGD log_loss (Lexical)",
 }
 
 MODEL_FILE_ALIASES = {
@@ -500,6 +502,160 @@ def prompt_menu_input() -> Tuple[Optional[str], str, Optional[int]]:
 
     return in_file, target_model, samples
 
+DIAGNOSTIC_ROOT = Path(__file__).resolve().parent.parent
+DIAGNOSTIC_TEST_CASES = DIAGNOSTIC_ROOT / "test case"
+DIAGNOSTIC_OUT = DIAGNOSTIC_ROOT / "docs"
+
+
+def classify_diagnostic_error(actual: str, predicted: str) -> str:
+    if actual == "phishing" and predicted == "benign":
+        return "phishing_as_benign"
+    if actual == "phishing" and predicted != "phishing":
+        return "phishing_other_threat"
+    if actual == "malware" and predicted == "phishing":
+        return "malware_as_phishing"
+    if actual == "malware" and predicted == "benign":
+        return "malware_as_benign"
+    if actual == "benign" and predicted != "benign":
+        return "benign_as_threat"
+    return "correct"
+
+
+def rows_from_openphish():
+    path = DIAGNOSTIC_TEST_CASES / "WEB_TEST_OPENPHISH_300_SO_SANH_2026-11-04.csv"
+    with path.open("r", encoding="utf-8-sig", newline="") as stream:
+        for row in csv.DictReader(stream):
+            for model in ("SVM", "TFIDF", "LEXICAL"):
+                yield {"dataset": "openphish_300_diagnostic", "source": "OpenPhish", "url": row["URL"],
+                       "label_reference": row["Nhan_tham_chieu"], "model_id": model, "predicted_class": row[model]}
+
+
+def rows_from_60_log():
+    path = DIAGNOSTIC_TEST_CASES / "WEB_TEST_CASES_2026-11-04.md"
+    for line in path.read_text(encoding="utf-8").splitlines():
+        cells = [value.strip().strip("`") for value in line.strip().strip("|").split("|")]
+        if len(cells) != 6 or not cells[0].isdigit() or cells[1] not in {"benign", "phishing", "malware"}:
+            continue
+        source = "URLhaus" if cells[1] == "malware" else "OpenPhish" if cells[1] == "phishing" else "benign_url_review"
+        for model, predicted in zip(("SVM", "TFIDF", "LEXICAL"), cells[3:]):
+            yield {"dataset": "web_60_diagnostic", "source": source, "url": cells[2],
+                   "label_reference": cells[1], "model_id": model, "predicted_class": predicted}
+
+
+def analyze_diagnostic_errors() -> None:
+    rows = [*rows_from_openphish(), *rows_from_60_log()]
+    strata = defaultdict(list)
+    for row in rows:
+        row["stratum"] = classify_diagnostic_error(row["label_reference"], row["predicted_class"])
+        strata[(row["dataset"], row["model_id"], row["stratum"])].append(row)
+    counts = {"|".join(key): len(values) for key, values in sorted(strata.items())}
+    (DIAGNOSTIC_OUT / "diagnostic_error_counts.json").write_text(json.dumps(counts, ensure_ascii=False, indent=2), encoding="utf-8")
+    rng = random.Random(20261104)
+    sample = []
+    for key, values in sorted(strata.items()):
+        if key[2] != "correct":
+            sample.extend(rng.sample(values, min(10, len(values))))
+    with (DIAGNOSTIC_OUT / "diagnostic_label_review.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=["dataset", "source", "url", "label_reference", "model_id", "predicted_class", "stratum", "verification_status", "review_notes"])
+        writer.writeheader()
+        writer.writerows({**row, "verification_status": "unreviewed", "review_notes": ""} for row in sample)
+    print(f"Wrote {len(sample)} review rows across {len(counts)} strata")
+
+
+
+
+def diagnose_bias(input_file: Path, max_rows: int | None = None) -> dict:
+    """Summarize class-specific URL and source patterns without writing files."""
+    if max_rows is not None and max_rows <= 0:
+        raise ValueError("max_rows must be positive")
+    stats = defaultdict(lambda: {"count": 0, "https": 0, "has_path": 0, "length_sum": 0, "source": Counter()})
+    with input_file.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames or not {"url", "label"}.issubset(reader.fieldnames):
+            raise ValueError("CSV must contain url and label columns")
+        for index, row in enumerate(reader):
+            if max_rows is not None and index >= max_rows:
+                break
+            url = (row.get("url") or "").strip()
+            label = (row.get("label") or "").strip().lower()
+            if not url or not label:
+                continue
+            try:
+                parts = urlsplit(url if "://" in url else "//" + url)
+            except ValueError:
+                continue
+            item = stats[label]
+            item["count"] += 1
+            item["https"] += parts.scheme.lower() == "https"
+            item["has_path"] += bool(parts.path and parts.path != "/")
+            item["length_sum"] += len(url)
+            item["source"][(row.get("source") or "unknown").strip() or "unknown"] += 1
+    return {
+        label: {
+            "count": item["count"],
+            "https_rate": round(item["https"] / item["count"], 4),
+            "path_rate": round(item["has_path"] / item["count"], 4),
+            "average_url_length": round(item["length_sum"] / item["count"], 2),
+            "top_sources": item["source"].most_common(10),
+        }
+        for label, item in sorted(stats.items())
+    }
+
+
+def _web_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def audit_web_decision(input_path: Path, batch_size: int = 5000) -> dict:
+    from web.risk_policy import RISK_THRESHOLD, risk_decision
+    if input_path.name != "val.csv":
+        raise ValueError("Decision audit uses val.csv only; final holdout must stay sealed")
+    results = {}
+    for key in MODEL_REGISTRY:
+        entry = ModelRuntime().load_model(key)
+        classes = [str(value) for value in entry["classes"]]
+        if "benign" not in classes:
+            raise ValueError(f"{key} has no benign class")
+        counts = Counter()
+        per_source = defaultdict(Counter)
+        per_class = defaultdict(Counter)
+        with input_path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            while True:
+                batch = []
+                for _ in range(batch_size):
+                    row = next(reader, None)
+                    if row is None:
+                        break
+                    if row.get("url") and row.get("label") in {"benign", "malicious", "phishing", "malware"}:
+                        batch.append(row)
+                if not batch:
+                    break
+                scores = entry["pipeline"].predict_proba([row["url"] for row in batch])
+                for row, score in zip(batch, scores):
+                    _, flag, _ = risk_decision(score[classes.index("benign")])
+                    actual = row["label"] != "benign"
+                    outcome = "tp" if actual and flag else "fn" if actual else "fp" if flag else "tn"
+                    counts[outcome] += 1
+                    per_source[row.get("source") or "unknown"][outcome] += 1
+                    per_class[row["label"]][outcome] += 1
+        model_path = Path(entry["path"])
+        results[key] = {"model_sha256": _web_sha256(model_path), "threshold": RISK_THRESHOLD,
+                        "score_calibrated": False, "risk_confusion": dict(counts),
+                        "threat_missed": counts["fn"], "benign_false_alarms": counts["fp"],
+                        "per_class": {name: dict(value) for name, value in per_class.items()},
+                        "per_source": {name: dict(value) for name, value in per_source.items()}}
+    return {"created_utc": datetime.now(timezone.utc).isoformat(), "dataset": str(input_path),
+            "dataset_sha256": _web_sha256(input_path), "split": "validation", "decision": "risk_score = 1 - raw benign score; risk_flag if >= 0.50",
+            "source_timestamp_status": "not_available_in_current_split", "models": results}
+
+
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 1:
         in_f, mdl, smp = prompt_menu_input()
@@ -510,9 +666,22 @@ if __name__ == "__main__":
         parser.add_argument("-m", "--model", default="all", choices=["logistic_tfidf", "svm", "logistic_lexical", "all"], help="Ten mo hinh")
         parser.add_argument("-s", "--samples", type=int, default=None, help="So luong mau kiem thu")
         parser.add_argument("--audit-generalization", action="store_true", help="So sanh train/val/test bang mau deu tren toan bo moi tap")
+        parser.add_argument("--audit-web-decision", action="store_true", help="Danh gia risk flag tren val.csv")
+        parser.add_argument("--analyze-diagnostics", action="store_true", help="Phan tich cac CSV web diagnostic")
+        parser.add_argument("--diagnose-bias", action="store_true", help="Thong ke shortcut theo lop va nguon")
         args = parser.parse_args()
 
-        if args.audit_generalization:
+        if args.diagnose_bias:
+            print(json.dumps(diagnose_bias(Path(args.input) if args.input else DATA_PROCESSED_DIR / "train.csv", args.samples), ensure_ascii=False, indent=2))
+        elif args.analyze_diagnostics:
+            analyze_diagnostic_errors()
+        elif args.audit_web_decision:
+            result = audit_web_decision(Path(args.input) if args.input else DATA_PROCESSED_DIR / "val.csv")
+            METRICS_DIR.mkdir(parents=True, exist_ok=True)
+            output = METRICS_DIR / "web_decision_validation.json"
+            output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"Wrote {output}")
+        elif args.audit_generalization:
             run_generalization_audit(model_name=args.model, samples_per_split=args.samples or 100000)
         else:
             run_evaluate(test_file=args.input, model_name=args.model, samples=args.samples)

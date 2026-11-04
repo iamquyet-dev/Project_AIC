@@ -26,10 +26,14 @@ if sys.platform == "win32":
         pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_PROCESSED_DIR = BASE_DIR / "data" / "processed"
+DATA_PROCESSED_DIR = Path(os.environ["AIC_RUN_DIR"]).resolve() / "processed" if os.environ.get("AIC_RUN_DIR") else BASE_DIR / "data" / "processed"
 
 CPU_COUNT = os.cpu_count() or 4
-DEFAULT_WORKERS = min(16, max(1, CPU_COUNT - 2))
+try:
+    from . import safe_default_workers, resource_log
+except ImportError:
+    from __init__ import safe_default_workers, resource_log
+DEFAULT_WORKERS = safe_default_workers()
 
 MULTI_PART_TLDS = {
     "co.uk", "org.uk", "gov.uk", "ac.uk", "me.uk", "net.uk",
@@ -103,6 +107,7 @@ FEATURE_COLUMNS = [
     "path_length", "entropy", "digit_ratio", "special_ratio", "dot_count",
     "hyphen_count", "slash_count", "hostname_is_ip", "uses_https",
     "suspicious_token_count", "tld", "channel", "source", "source_split",
+    "url_raw", "label_raw", "source_observed_utc", "retrieved_utc", "verification_status", "timestamp_utc",
 ]
 
 
@@ -130,6 +135,8 @@ def _feature_values(row: Dict[str, str]) -> List[Any]:
         int(is_ip_address(host)), int(scheme == "https"),
         sum(url.lower().count(token) for token in SUSPICIOUS_TOKENS),
         parse_tld(host), row.get("channel", ""), row.get("source", ""), row.get("source_split", ""),
+        row.get("url_raw", url), row.get("label_raw", ""), row.get("source_observed_utc", ""),
+        row.get("retrieved_utc", ""), row.get("verification_status", "unverified"), row.get("timestamp_utc", ""),
     ]
 
 
@@ -179,6 +186,7 @@ def run_features(
     if requested <= 0:
         raise ValueError("So tien trinh phai duong")
     num_workers = min(requested, os.cpu_count() or 1)
+    logger.info(resource_log(num_workers))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.time()
 

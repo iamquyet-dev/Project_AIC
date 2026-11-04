@@ -18,9 +18,9 @@
     <div class="nav-model-bar">
       <label for="header-model-select" class="model-label">Mô hình:</label>
       <select id="header-model-select" class="model-dropdown">
-        <option value="model_word_char_svm">Word + char n-grams · Linear SVM (3.98 MB)</option>
-        <option value="model_word_tfidf_logistic">Word TF-IDF · Logistic Regression (2.34 MB)</option>
-        <option value="model_lexical_logistic">Lexical features · Logistic Regression (1.9 KB)</option>
+        <option value="model_word_char_svm">Word + char · SGD modified_huber</option>
+        <option value="model_word_tfidf_logistic">Word TF-IDF · SGD log_loss</option>
+        <option value="model_lexical_logistic">Lexical · SGD log_loss</option>
       </select>
       <span id="model-status-indicator" class="status-indicator online">Sẵn sàng</span>
     </div>
@@ -40,7 +40,7 @@
       <div class="scanner-hero">
         <h1>Phân loại Nguy cơ URL Đa lớp</h1>
         <p>Hệ thống phân loại 4 lớp: An toàn (Benign), Lừa đảo (Phishing), Mã độc (Malware), Độc hại (Malicious).</p>
-        <p>Điểm mô hình chưa được hiệu chuẩn; không xem phần trăm là xác suất URL an toàn hay độc hại đã kiểm định.</p>
+        <p>Điểm mô hình chưa được hiệu chuẩn; ngưỡng cảnh báo 50% hiện là quy tắc tạm thời, chưa được chốt bằng validation đủ bốn lớp. Không xem phần trăm là xác suất URL an toàn hay độc hại đã kiểm định.</p>
       </div>
 
       <div class="scanner-box card">
@@ -181,18 +181,18 @@
 
       <div class="grid-3col" style="margin-top: 20px;">
         <div class="card plot-card">
-          <h4>1. Linear SVM (Word + Char n-grams)</h4>
-          <img src="/reports/cm_svm.png" alt="Confusion Matrix SVM" class="cm-img" onclick="zoomImage(this, '1. Linear SVM (Word + Char n-grams)')" onerror="this.style.display='none'">
+          <h4>1. SGD modified_huber (Word + Char n-grams)</h4>
+          <img src="/reports/cm_svm.png" alt="Confusion Matrix Word + Char" class="cm-img" onclick="zoomImage(this, '1. SGD modified_huber (Word + Char n-grams)')" onerror="this.style.display='none'">
           <p class="muted" style="font-size: 11px; margin-top: 6px;">(Nhấp vào ảnh để phóng to)</p>
         </div>
         <div class="card plot-card">
-          <h4>2. Logistic Regression (TF-IDF)</h4>
-          <img src="/reports/cm_logistic_tfidf.png" alt="Confusion Matrix TF-IDF" class="cm-img" onclick="zoomImage(this, '2. Logistic Regression (TF-IDF)')" onerror="this.style.display='none'">
+          <h4>2. SGD log_loss (TF-IDF)</h4>
+          <img src="/reports/cm_logistic_tfidf.png" alt="Confusion Matrix TF-IDF" class="cm-img" onclick="zoomImage(this, '2. SGD log_loss (TF-IDF)')" onerror="this.style.display='none'">
           <p class="muted" style="font-size: 11px; margin-top: 6px;">(Nhấp vào ảnh để phóng to)</p>
         </div>
         <div class="card plot-card">
-          <h4>3. Logistic Regression (Lexical)</h4>
-          <img src="/reports/cm_logistic_lexical.png" alt="Confusion Matrix Lexical" class="cm-img" onclick="zoomImage(this, '3. Logistic Regression (Lexical)')" onerror="this.style.display='none'">
+          <h4>3. SGD log_loss (Lexical)</h4>
+          <img src="/reports/cm_logistic_lexical.png" alt="Confusion Matrix Lexical" class="cm-img" onclick="zoomImage(this, '3. SGD log_loss (Lexical)')" onerror="this.style.display='none'">
           <p class="muted" style="font-size: 11px; margin-top: 6px;">(Nhấp vào ảnh để phóng to)</p>
         </div>
       </div>

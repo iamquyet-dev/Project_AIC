@@ -5,12 +5,13 @@ from pathlib import Path
 
 DETECTOR_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = DETECTOR_DIR.parent
+RUN_ROOT = Path(os.environ["AIC_RUN_DIR"]).resolve() if os.environ.get("AIC_RUN_DIR") else None
 
 DATA_DIR = PROJECT_ROOT / "data"
 DATA_RAW_DIR = DATA_DIR / "raw"
-DATA_PROCESSED_DIR = DATA_DIR / "processed"
+DATA_PROCESSED_DIR = (RUN_ROOT / "processed") if RUN_ROOT else DATA_DIR / "processed"
 
-OUTPUTS_DIR = PROJECT_ROOT / "outputs"
+OUTPUTS_DIR = RUN_ROOT if RUN_ROOT else PROJECT_ROOT / "outputs"
 MODELS_DIR = OUTPUTS_DIR / "models"
 METRICS_DIR = OUTPUTS_DIR / "metrics"
 FIGURES_DIR = OUTPUTS_DIR / "figures"

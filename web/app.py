@@ -10,6 +10,7 @@ if sys.platform == "win32":
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import hashlib
 import mimetypes
 import os
 from pathlib import Path
@@ -85,6 +86,25 @@ def load_dataset_summary():
         return {"verified": False, "reason": "Không đọc được metadata chia tập dữ liệu."}
 
 
+def verify_web_report(report: dict) -> dict:
+    names = {"svm": "model_word_char_svm.joblib", "logistic_tfidf": "model_word_tfidf_logistic.joblib", "logistic_lexical": "model_lexical_logistic.joblib"}
+    checks = {}
+    for model in report.get("models", []):
+        key = model.get("model_key")
+        filename = names.get(key)
+        web_path = MODELS_DIR / filename if filename else None
+        output_path = ROOT.parent / "outputs" / "models" / filename if filename else None
+        expected = model.get("model_sha256")
+        checks[key] = bool(expected and web_path and output_path and web_path.is_file() and output_path.is_file()
+                           and hashlib.sha256(web_path.read_bytes()).hexdigest() == expected
+                           and hashlib.sha256(output_path.read_bytes()).hexdigest() == expected)
+    summary = load_dataset_summary()
+    split_version = report.get("provenance", {}).get("split_version")
+    verified = bool(report.get("provenance_verified") and summary.get("verified") and split_version
+                    and summary.get("version") == split_version and len(checks) == 3 and all(checks.values()))
+    return {"verified": verified, "models": checks, "reason": "" if verified else "Chưa xác minh báo cáo với đủ ba model web, model đầu ra và phiên bản dữ liệu hiện tại."}
+
+
 class WebAppHandler(BaseHTTPRequestHandler):
     server_version = "AIC211-Engine/1.0"
 
@@ -147,7 +167,9 @@ class WebAppHandler(BaseHTTPRequestHandler):
             if not summary_path.is_file():
                 summary_path = REPORTS_DIR / "multiclass_summary.json"
             if summary_path.is_file():
-                self.send_json(200, json.loads(summary_path.read_text(encoding="utf-8")))
+                report = json.loads(summary_path.read_text(encoding="utf-8"))
+                report["web_report_match"] = verify_web_report(report)
+                self.send_json(200, report)
             else:
                 self.send_json(200, {"message": "Chưa có file báo cáo multiclass_summary.json"})
             return

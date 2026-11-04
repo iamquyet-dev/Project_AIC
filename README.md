@@ -1,7 +1,7 @@
 # Hệ Thống Phát Hiện Mối Đe Dọa URL Đa Lớp (AIC211 URL Threat Defense)
 
-Hệ thống học máy phát hiện nguy cơ an ninh mạng từ liên kết URL đa lớp (Multi-Class URL Threat Detection) dành cho đề án AIC211. Nhận diện và phân loại chính xác 4 lớp nguy cơ:
-- `benign`: Liên kết an toàn, trang web chính thống.
+Hệ thống học máy phát hiện nguy cơ an ninh mạng từ liên kết URL đa lớp (Multi-Class URL Threat Detection) dành cho đề án AIC211. Mục tiêu là phân loại URL đầy đủ thành 4 lớp:
+- `benign`: URL được nguồn xác minh là lành tính tại thời điểm thu thập.
 - `phishing`: Trang web lừa đảo, giả mạo tài khoản / ngân hàng.
 - `malware`: Trang phân phối mã độc, virus, tệp thực thi độc hại.
 - `malicious`: Tấn công khai thác lỗ hổng, defacement, độc hại tổng hợp.
@@ -46,7 +46,7 @@ Project_AIC/
 │   │   ├── mendeley_large_url_corpus/       # Tập dữ liệu nghiên cứu lớn của Mendeley
 │   │   ├── openphish_snapshot/              # Luồng cấp dữ liệu phishing thời gian thực
 │   │   ├── phishvn_open/                    # Bộ dữ liệu lừa đảo tiếng Việt (PhishVN)
-│   │   ├── tranco_domain_ranking/           # Danh sách 1 triệu tên miền an toàn, phổ biến nhất thế giới
+│   │   ├── tranco_domain_ranking/           # Bảng xếp hạng tên miền, không phải nhãn URL benign
 │   │   └── uci_phiusiil_2024/               # Bộ dữ liệu lừa đảo chuẩn học thuật UCI 2024
 │   │
 │   └── 📁 processed/                        # Dữ liệu ĐÃ QUA XỬ LÝ (sau khi lọc sạch & chuẩn hóa)
@@ -55,9 +55,9 @@ Project_AIC/
 │       ├── 03_cleaned.csv                   # Dữ liệu sau bước 04: Đã loại bỏ trùng lặp và link rác
 │       ├── 03_rejected.csv                  # Nhật ký các dòng bị từ chối/loại bỏ vì sai định dạng
 │       ├── 04_features.csv                  # Dữ liệu sau bước 05: Đã trích xuất các thuộc tính URL
-│       ├── train.csv                        # Tập HUẤN LUYỆN: ~30.28 triệu mẫu URL sạch
-│       ├── val.csv                          # Tập KIỂM ĐỊNH: ~6.48 triệu mẫu URL (dùng tinh chỉnh tham số)
-│       ├── test.csv                         # Tập KIỂM THỬ ĐỘC LẬP: ~6.48 triệu mẫu URL (đo độ chính xác)
+│       ├── train.csv                        # Tập HUẤN LUYỆN: 27.518.983 mẫu URL theo manifest hiện có
+│       ├── val.csv                          # Tập KIỂM ĐỊNH: 5.937.490 mẫu URL theo manifest hiện có
+│       ├── test.csv                         # Tập KIỂM THỬ ĐỘC LẬP: 5.913.123 mẫu URL test nội bộ theo manifest hiện có
 │       └── dataset_version.json             # File lưu thông tin phiên bản và số lượng mẫu từng lớp
 │
 ├── 📂 steps/                                # [QUY TRÌNH HỌC MÁY] - 8 bước thực thi tự động từ A-Z
@@ -83,9 +83,9 @@ Project_AIC/
 │
 ├── 📂 outputs/                              # [KẾT QUẢ ĐẦU RA] - Sản phẩm sau khi huấn luyện và đánh giá
 │   ├── 📁 models/                           # 3 file mô hình máy học hoàn chỉnh (đã huấn luyện xong)
-│   │   ├── model_word_char_svm.joblib       # 1. Linear SVM (kết hợp từ vựng + ký tự n-gram 3-5 ký tự)
-│   │   ├── model_word_tfidf_logistic.joblib # 2. Logistic Regression TF-IDF (tần suất từ ngữ)
-│   │   └── model_lexical_logistic.joblib    # 3. Logistic Regression Lexical (11 đặc trưng cấu trúc)
+│   │   ├── model_word_char_svm.joblib       # 1. SGDClassifier modified_huber (word + char n-gram)
+│   │   ├── model_word_tfidf_logistic.joblib # 2. SGDClassifier log_loss (word TF-IDF)
+│   │   └── model_lexical_logistic.joblib    # 3. SGDClassifier log_loss (11 đặc trưng lexical)
 │   │
 │   ├── 📁 figures/                          # Biểu đồ Ma trận nhầm lẫn (Confusion Matrix Heatmap)
 │   │   ├── cm_svm.png                       # Biểu đồ ma trận 4x4 mô hình SVM
@@ -132,25 +132,23 @@ Project_AIC/
 
 ---
 
-## 4. Bảng Đánh Giá Hiệu Năng 3 Mô Hình Huấn Luyện
+## 4. Kết quả và trạng thái xác minh
 
-**Kết quả lịch sử từ mã và dữ liệu cũ** trên 6.484.817 URL. Cách chia tập cũ theo từng dòng có thể để URL trùng hoặc gần trùng lọt vào cả train và test; chưa thể khẳng định các số liệu dưới đây là ước lượng độc lập. Sau khi tạo lại dữ liệu, huấn luyện và đánh giá, cần cập nhật bảng này:
+[**Báo cáo kết quả và giới hạn 04/11/2026**](BAO_CAO_KET_QUA_VA_GIOI_HAN_2026-11-04.md) tách rõ test nội bộ, chẩn đoán ngoài tập qua web và lượt chạy thử mã mới. [Quy tắc nhãn theo nguồn](docs/SOURCE_LABEL_POLICY_2026-11-04.md) nêu các nhãn chưa xác minh.
 
-| Mô hình | Đặc trưng trích xuất | Accuracy | Precision | Recall | F1-Score | Tốc độ quét | Độ trễ suy luận | Dung lượng file |
-|---|---|---|---|---|---|---|---|---|
-| **Linear SVM** | Word + Char n-grams (3-5 ký tự) | **80.61%** | **80.94%** | **80.61%** | **80.65%** | 6.052 URL/s | 0.1652 ms | 2.67 MB |
-| **Logistic Regression** | Word TF-IDF | **75.89%** | **76.28%** | **75.89%** | **75.83%** | **44.416 URL/s** | **0.0225 ms** | 1.89 MB |
-| **Logistic Regression** | 11 đặc trưng cấu trúc (Lexical) | **59.08%** | **59.99%** | **59.08%** | **59.41%** | 17.746 URL/s | 0.0564 ms | 1.6 KB |
+**Test nội bộ hiện có**: `v_20261103_134343`, `test.csv` 5.913.123 URL, báo cáo tạo ngày 03/11/2026 20:22:49 UTC. Split của phiên bản này theo hostname, chưa phải holdout độc lập theo registrable domain, nguồn hay thời gian. Hash model và dataset khớp lineage trong [JSON](outputs/metrics/multiclass_summary.json), nhưng không chứng minh hiệu năng trên feed mới.
 
-Có thể kiểm tra khác biệt scheme, path, độ dài URL và nguồn theo lớp bằng lệnh `python steps/diagnose_bias.py data/processed/train.csv --max-rows 10000`. Kết quả từ 10.000 dòng đầu chỉ là chẩn đoán mẫu, không đại diện toàn bộ dữ liệu.
+| Model thực tế | Accuracy | Macro-F1 | Recall phishing | Recall malware |
+|---|---:|---:|---:|---:|
+| Word + char, `SGDClassifier(loss="modified_huber")` | 87,48% | 81,37% | 81,09% | 78,04% |
+| Word TF-IDF, `SGDClassifier(loss="log_loss")` | 78,75% | 63,69% | 59,57% | 72,26% |
+| Lexical, `SGDClassifier(loss="log_loss")` | 67,15% | 47,00% | 55,78% | 22,07% |
 
-**Trạng thái sau rà soát 03/11/2026:** Báo cáo JSON hiện có ghi Accuracy test 80,45% (SVM), 73,90% (TF-IDF) và 59,08% (lexical) trên 6.484.817 URL. Những mô hình và CSV này được tạo trước khi sửa quy trình gán nhãn, loại nhãn xung đột, chia theo hostname và lưu provenance. Vì vậy web hiển thị điểm JSON với cảnh báo chưa xác minh phiên bản; chưa được kết luận mô hình có hay không học vẹt. Cần tạo lại dữ liệu, huấn luyện, đánh giá và đối chiếu train/validation/test trên cùng manifest trước khi công bố điểm mới. Bước đánh giá mới có tùy chọn `--audit-generalization` để lấy mẫu đều từ toàn bộ từng tập và xuất chênh lệch train–val/test; phép này chỉ là chẩn đoán, không thay thế kiểm tra trên domain/nguồn/thời gian mới.
+Trên 300 URL phishing mới từ OpenPhish qua web, recall theo thứ tự là 47,00% / 31,67% / 32,00%; không thể tính accuracy tổng thể hay báo động nhầm benign từ một tập chỉ có phishing. Trên 20 URLhaus tập trung vào IP và `/i`/`/bin.sh`, cả ba model đều 0/20 đúng lớp malware. Lô 10.000 tên miền gắn cờ chỉ dùng để rà soát vì nhãn ở cấp domain. Các bộ này đã được xem và dùng để định hướng sửa nên không phải final holdout mới.
 
-### Đánh giá chất lượng nhận diện (Mô hình Linear SVM):
-- **Benign (An toàn)**: Đạt F1-Score **87.6%** (Độ chính xác 86.0%, độ phủ 89.2% trên 3.423.772 link).
-- **Phishing (Lừa đảo)**: Đạt F1-Score **80.7%** (Độ chính xác 85.1%, độ phủ 76.8% trên 2.115.471 link).
-- **Malware (Mã độc)**: Đạt F1-Score **60.4%** (trên 428.475 link).
-- **Malicious (Độc hại)**: Đạt F1-Score **51.2%** (trên 517.099 link).
+**Bản chạy thử mới** trong `runs/run_20261104_verified_smoke` chỉ kiểm tra kỹ thuật với giới hạn 5.000 mẫu; train thiếu lớp `malicious`, test có 4 URL malware. Không công bố điểm smoke run như kết quả model mới. Mã đã hỗ trợ chạy thử vào thư mục mới bằng `python -B steps/run_all.py --isolated --run-dir runs/run_TEN_MOI`; thêm `--all-rows` chỉ sau khi xác minh mapping nguồn và có tập đủ bốn lớp, benign mới và final holdout chưa nhìn thấy.
+
+Các công cụ kiểm tra nằm trong step tương ứng: `step_02_parsing.py --source-inventory`, `step_06_dataset.py --audit-split`, và `step_08_evaluate.py --analyze-diagnostics`, `--diagnose-bias` hoặc `--audit-web-decision`. Mỗi lệnh chỉ chạy tác vụ được chọn khi dùng cờ này.
 
 ---
 
@@ -167,7 +165,7 @@ cd steps
 python step_07_train.py
 ```
 - Chọn `1`: Huấn luyện mới từ đầu (hoặc `2`: Huấn luyện tăng tiến trên nền mô hình cũ).
-- Chọn số dòng: Mặc định chọn `4` (toàn bộ 30.28 triệu dòng).
+- Chọn số dòng: Mặc định chọn `4` để dùng toàn bộ train của phiên bản dữ liệu đã xác minh.
 - *Sau khi huấn luyện xong, mô hình sẽ tự động cập nhật vào cả thư mục `outputs/models/` và `web/models/`*.
 
 ### 3. Đánh giá mô hình & Xuất báo cáo (Step 08)

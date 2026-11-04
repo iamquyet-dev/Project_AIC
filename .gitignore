@@ -47,11 +47,15 @@ Thumbs.db
 desktop.ini
 
 data/
+runs/
+runs_original_backup/
 
 # Archives
 *.zip
 *.tar.gz
 *.7z
 *.md
+!BAO_CAO_KET_QUA_VA_GIOI_HAN_2026-11-04.md
+!docs/SOURCE_LABEL_POLICY_2026-11-04.md
 *.cmd
 /test case

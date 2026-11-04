@@ -10,13 +10,13 @@ from itertools import islice
 import json
 import logging
 import math
+import os
 from pathlib import Path
 import random
 import sys
 import tempfile
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlsplit
 
 try:
     csv.field_size_limit(128 * 1024 * 1024)
@@ -33,7 +33,12 @@ if sys.platform == "win32":
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 from url_detector.config import CLASSES
-DATA_PROCESSED_DIR = BASE_DIR / "data" / "processed"
+from functools import lru_cache
+import ipaddress
+import sqlite3
+from urllib.parse import urlsplit
+from collections import Counter, defaultdict
+DATA_PROCESSED_DIR = Path(os.environ["AIC_RUN_DIR"]).resolve() / "processed" if os.environ.get("AIC_RUN_DIR") else BASE_DIR / "data" / "processed"
 
 def setup_logger(name: str = "Buoc06-TapDuLieu") -> logging.Logger:
     logger = logging.getLogger(name)
@@ -88,17 +93,6 @@ def find_source_dataset() -> Path:
         return found_unified[0]
     raise FileNotFoundError("Khong tim thay tap du lieu de chia tach. Vui long chay Buoc 04 hoac Buoc 05 truoc.")
 
-def canonical_group_key(url: str) -> str:
-    value = url.strip()
-    try:
-        parts = urlsplit(value if "://" in value else "//" + value)
-        host = (parts.hostname or "").lower().rstrip(".").removeprefix("www.")
-    except ValueError:
-        return f"raw:{value.lower()}"
-    if not host:
-        return f"raw:{value.lower()}"
-    return f"host:{host}"
-
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb", buffering=16*1024*1024) as handle:
@@ -120,6 +114,7 @@ def run_dataset_split(
     test_ratio: float = 0.15,
     seed: int = 42,
     max_samples: Optional[int] = None,
+    holdout_sources: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     ratios = (train_ratio, val_ratio, test_ratio)
     if any(not math.isfinite(r) or r <= 0 for r in ratios) or not math.isclose(sum(ratios), 1.0, abs_tol=1e-9):
@@ -129,6 +124,8 @@ def run_dataset_split(
     in_path = Path(input_file) if input_file else find_source_dataset()
     if not in_path.is_file():
         raise FileNotFoundError(f"Khong tim thay tep du lieu: {in_path}")
+    if not PSL_PATH.is_file():
+        raise FileNotFoundError(f"Thieu Public Suffix List snapshot: {PSL_PATH}")
     DATA_PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     paths = {name: DATA_PROCESSED_DIR / f"{name}.csv" for name in ("train", "val", "test")}
     if in_path.resolve() in {path.resolve() for path in paths.values()}:
@@ -136,6 +133,8 @@ def run_dataset_split(
     started = time.time()
     counts = {"train": 0, "val": 0, "test": 0, "total": 0}
     class_dist = {name: {} for name in paths}
+    group_dist = {name: 0 for name in paths}
+    source_dist = {name: {} for name in paths}
     skipped = {"invalid_url": 0, "unknown_label": 0, "malformed_row": 0}
 
     in_size_mb = round(in_path.stat().st_size / (1024 * 1024), 2)
@@ -154,13 +153,17 @@ def run_dataset_split(
         url_idx = next((i for i, col in enumerate(lowered) if col in ("url", "urls", "domain")), None)
         label_idx = next((i for i, col in enumerate(lowered) if col in ("label", "class", "target")), None)
         split_idx = next((i for i, col in enumerate(lowered) if col in ("source_split", "split")), None)
+        source_idx = lowered.index("source") if "source" in lowered else None
         if url_idx is None or label_idx is None:
             raise ValueError("CSV can cot URL va label ro rang")
         id_idx = lowered.index("label_id") if "label_id" in lowered else None
         out_header = list(header) if id_idx is not None else [*header, "label_id"]
 
         pins: Dict[str, int] = {}
-        if split_idx is not None:
+        holdout_set = set(holdout_sources or [])
+        if holdout_set and source_idx is None:
+            raise ValueError("Source holdout requires a source column")
+        if split_idx is not None or holdout_set:
             print("-> [1/4] Kiem tra va ghim nhan goc cua publisher vao RAM...", flush=True)
             ranks = {"test": 0, "validation": 1, "val": 1, "train": 2}
             with open(in_path, "r", encoding="utf-8-sig", newline="", buffering=16*1024*1024) as fin:
@@ -171,10 +174,8 @@ def run_dataset_split(
                         break
                     if len(row) != len(header) or not row[url_idx].strip():
                         continue
-                    split_val = row[split_idx].strip().lower()
-                    if not split_val:
-                        continue
-                    rank = ranks.get(split_val)
+                    split_val = row[split_idx].strip().lower() if split_idx is not None else ""
+                    rank = 0 if (source_idx is not None and row[source_idx].strip() in holdout_set) else ranks.get(split_val)
                     if rank is not None:
                         key = canonical_group_key(row[url_idx])
                         curr = pins.get(key)
@@ -215,6 +216,7 @@ def run_dataset_split(
                         else:
                             target = _split_name(key, seed, train_ratio, val_ratio)
                         split_cache[key] = target
+                        group_dist[target] += 1
 
                     if id_idx is None:
                         row = [*row, str(LABEL_IDS[label])]
@@ -231,6 +233,9 @@ def run_dataset_split(
                     counts[target] += 1
                     counts["total"] += 1
                     class_dist[target][label] = class_dist[target].get(label, 0) + 1
+                    if source_idx is not None:
+                        source = row[source_idx].strip() or "unknown"
+                        source_dist[target][source] = source_dist[target].get(source, 0) + 1
                     if number > 0 and number % 500000 == 0:
                         s_sec = round(time.time() - t_split0, 1)
                         spd = int(number / max(s_sec, 0.1))
@@ -274,8 +279,12 @@ def run_dataset_split(
         "schema": out_header,
         "total_rows": counts["total"],
         "skipped_rows": skipped,
-        "split_policy": "SHA256(seed, exact hostname without www/trailing dot); publisher test > val > train pins take precedence when source_split exists",
+        "split_policy": "SHA256(seed, registrable domain from pinned Public Suffix List including private rules); IP and unknown suffixes grouped by exact host; publisher test > val > train pins take precedence",
+        "public_suffix_list_sha256": _file_sha256(PSL_PATH),
+        "group_counts": group_dist,
+        "source_counts_by_split": source_dist,
         "source_split_present": split_idx is not None,
+        "source_holdout": sorted(holdout_set),
         "shuffle_policy": "16 disk buckets per split, shuffled in bounded 10000-row blocks",
         "integrity_verified": True,
         "seed": seed,
@@ -320,6 +329,139 @@ def prompt_menu_input() -> Tuple[Optional[str], float, float, float, Optional[in
 
     return in_file, tr, vr, te, s_size
 
+PSL_PATH = Path(__file__).resolve().parent / "public_suffix_list.dat"
+
+
+@lru_cache(maxsize=1)
+def _rules() -> tuple[set[str], set[str], set[str]]:
+    exact: set[str] = set()
+    wildcard: set[str] = set()
+    exception: set[str] = set()
+    for raw in PSL_PATH.read_text(encoding="utf-8").splitlines():
+        rule = raw.strip().lower()
+        if not rule or rule.startswith("//"):
+            continue
+        if rule.startswith("!"):
+            exception.add(rule[1:])
+        elif rule.startswith("*."):
+            wildcard.add(rule[2:])
+        else:
+            exact.add(rule)
+    return exact, wildcard, exception
+
+
+def canonical_group_key(url: str) -> str:
+    value = url.strip()
+    try:
+        host = (urlsplit(value if "://" in value else "//" + value).hostname or "").lower().rstrip(".")
+    except ValueError:
+        host = ""
+    if not host:
+        return f"raw:{value.lower()}"
+    try:
+        return f"ip:{ipaddress.ip_address(host).compressed}"
+    except ValueError:
+        pass
+    host = host.removeprefix("www.")
+    try:
+        host = host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return f"host:{host}"
+    labels = host.split(".")
+    if len(labels) < 2 or any(not label for label in labels):
+        return f"host:{host}"
+    exact, wildcard, exception = _rules()
+    suffix_length = 1
+    matched = False
+    for index in range(len(labels)):
+        candidate = ".".join(labels[index:])
+        if candidate in exception:
+            suffix_length = len(labels) - index - 1
+            matched = True
+            break
+        if candidate in exact:
+            suffix_length = max(suffix_length, len(labels) - index)
+            matched = True
+        if index > 0 and candidate in wildcard:
+            suffix_length = max(suffix_length, len(labels) - index + 1)
+            matched = True
+    if not matched or len(labels) <= suffix_length:
+        return f"host:{host}"
+    return f"domain:{'.'.join(labels[-suffix_length - 1:])}"
+
+
+def _digest(value: str) -> bytes:
+    return hashlib.blake2b(value.encode("utf-8"), digest_size=16).digest()
+
+
+def _host_and_near(url: str) -> tuple[str, str]:
+    try:
+        parts = urlsplit(url if "://" in url else "//" + url)
+        host = (parts.hostname or "").lower().rstrip(".")
+        host = host.encode("idna").decode("ascii")
+        port = parts.port
+    except (ValueError, UnicodeError):
+        return "", url.lower()
+    if not host:
+        return "", url.lower()
+    try:
+        host = ipaddress.ip_address(host).compressed
+    except ValueError:
+        host = host.removeprefix("www.")
+    port_text = "" if port in (None, 80, 443) else f":{port}"
+    near = f"{host}{port_text}{(parts.path or '/').rstrip('/') or '/'}?{parts.query}"
+    return host, near
+
+
+def audit_split(processed_dir: Path, output: Path) -> dict:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    db_path = output.with_suffix(".sqlite")
+    if db_path.exists():
+        raise FileExistsError(f"Existing audit database: {db_path}")
+    rows = Counter()
+    source_splits = defaultdict(Counter)
+    with sqlite3.connect(db_path) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        for table in ("groups", "hosts", "urls", "near"):
+            db.execute(f"CREATE TABLE {table} (key BLOB PRIMARY KEY, mask INTEGER NOT NULL)")
+        for split, mask in (("train", 1), ("val", 2), ("test", 4)):
+            with (processed_dir / f"{split}.csv").open("r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                batch = {name: [] for name in ("groups", "hosts", "urls", "near")}
+                for row in reader:
+                    url = row.get("url") or ""
+                    if not url:
+                        continue
+                    host, near = _host_and_near(url)
+                    batch["groups"].append((_digest(canonical_group_key(url)), mask))
+                    batch["hosts"].append((_digest(host), mask))
+                    batch["urls"].append((_digest(url), mask))
+                    batch["near"].append((_digest(near), mask))
+                    rows[split] += 1
+                    source_splits[row.get("source") or "unknown"][split] += 1
+                    if len(batch["groups"]) >= 10000:
+                        _flush(db, batch)
+                _flush(db, batch)
+        summary = {}
+        for table in ("groups", "hosts", "urls", "near"):
+            unique, overlap = db.execute(f"SELECT COUNT(*), SUM(CASE WHEN mask IN (3,5,6,7) THEN 1 ELSE 0 END) FROM {table}").fetchone()
+            summary[table] = {"unique": unique, "across_splits": overlap or 0}
+    report = {"rows": dict(rows), "overlap": summary, "source_counts_by_split": {k: dict(v) for k, v in source_splits.items()},
+              "near_key_note": "Candidate only: lowercased host, optional www removed, default port removed, trailing path slash removed, fragment removed. Manual destination review required.",
+              "grouping": "Pinned Public Suffix List with private suffixes; IP by exact host"}
+    output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report
+
+
+def _flush(db: sqlite3.Connection, batch: dict) -> None:
+    for table, values in batch.items():
+        db.executemany(f"INSERT INTO {table}(key,mask) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET mask=mask|excluded.mask", values)
+        values.clear()
+    db.commit()
+
+
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 1:
         in_file, tr, vr, te, s_size = prompt_menu_input()
@@ -331,6 +473,12 @@ if __name__ == "__main__":
         parser.add_argument("--train-ratio", type=float, default=0.70, help="Ty le Train (mac dinh 0.70)")
         parser.add_argument("--val-ratio", type=float, default=0.15, help="Ty le Val (mac dinh 0.15)")
         parser.add_argument("--test-ratio", type=float, default=0.15, help="Ty le Test (mac dinh 0.15)")
+        parser.add_argument("--holdout-source", action="append", default=[], help="Nguon giu rieng cho test; co the lap lai")
+        parser.add_argument("--audit-split", action="store_true", help="Kiem tra trung lap train/val/test hien tai")
+        parser.add_argument("--audit-output", type=Path, default=None)
         args = parser.parse_args()
 
-        run_dataset_split(input_file=args.input, train_ratio=args.train_ratio, val_ratio=args.val_ratio, test_ratio=args.test_ratio, max_samples=args.samples)
+        if args.audit_split:
+            print(audit_split(DATA_PROCESSED_DIR, args.audit_output or DATA_PROCESSED_DIR.parent / "metrics" / "split_audit.json"))
+        else:
+            run_dataset_split(input_file=args.input, train_ratio=args.train_ratio, val_ratio=args.val_ratio, test_ratio=args.test_ratio, max_samples=args.samples, holdout_sources=args.holdout_source)

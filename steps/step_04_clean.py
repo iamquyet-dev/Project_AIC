@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+from collections import Counter, defaultdict
+import json
 import logging
 import multiprocessing as mp
 import os
@@ -30,10 +32,14 @@ if sys.platform == "win32":
         pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_PROCESSED_DIR = BASE_DIR / "data" / "processed"
+DATA_PROCESSED_DIR = Path(os.environ["AIC_RUN_DIR"]).resolve() / "processed" if os.environ.get("AIC_RUN_DIR") else BASE_DIR / "data" / "processed"
 
 CPU_COUNT = os.cpu_count() or 4
-DEFAULT_WORKERS = min(16, max(1, CPU_COUNT - 2))
+try:
+    from . import safe_default_workers, resource_log
+except ImportError:
+    from __init__ import safe_default_workers, resource_log
+DEFAULT_WORKERS = safe_default_workers()
 
 MISSING_TOKENS = {"nan", "null", "none", "na", "n/a", "<na>", "undefined", "unknown", ""}
 VALID_LABELS = {"benign", "phishing", "malware", "malicious"}
@@ -66,7 +72,7 @@ def is_valid_url(u: str) -> bool:
         return False
     return True
 
-def _clean_shard_worker(args: Tuple[str, str, str, List[str], int, int]) -> Dict[str, int]:
+def _clean_shard_worker(args: Tuple[str, str, str, List[str], int, int]) -> Dict[str, Any]:
     shard_in, part_clean, part_rej, fieldnames, shard_id, total_shards = args
     counts = {"processed": 0, "cleaned": 0, "missing": 0, "invalid": 0, "duplicate": 0, "conflict": 0, "unknown_label": 0}
     p_in = Path(shard_in)
@@ -74,8 +80,9 @@ def _clean_shard_worker(args: Tuple[str, str, str, List[str], int, int]) -> Dict
         return counts
 
     # Phase 2.1: In-memory Indexing & Conflict detection within shard
-    seen: Dict[str, str] = {}
+    seen: Dict[str, Tuple[str, str]] = {}
     conflicts: Set[str] = set()
+    conflict_evidence: Dict[str, Set[Tuple[str, str]]] = defaultdict(set)
 
     with open(shard_in, "r", encoding="utf-8-sig", newline="", buffering=8*1024*1024) as fin:
         reader = csv.DictReader(fin)
@@ -84,13 +91,32 @@ def _clean_shard_worker(args: Tuple[str, str, str, List[str], int, int]) -> Dict
                 continue
             url = (row.get("url") or "").strip()
             label = (row.get("label") or "").strip().lower()
+            source = (row.get("source") or "unknown").strip()
             if not is_valid_url(url) or label not in VALID_LABELS:
                 continue
-            prev_label = seen.get(url)
-            if prev_label is None:
-                seen[url] = label
-            elif prev_label != label:
+            previous = seen.get(url)
+            if previous is None:
+                seen[url] = (label, source)
+            elif previous[0] != label:
                 conflicts.add(url)
+                conflict_evidence[url].update((previous, (label, source)))
+            elif url in conflicts:
+                conflict_evidence[url].add((label, source))
+
+    conflict_pairs = Counter()
+    conflict_source_pairs = Counter()
+    conflict_samples = []
+    for url, evidence in conflict_evidence.items():
+        labels = sorted({label for label, _ in evidence})
+        sources = sorted({source for _, source in evidence})
+        for left_index, left in enumerate(labels):
+            for right in labels[left_index + 1:]:
+                conflict_pairs[f"{left}|{right}"] += 1
+        for left_index, left in enumerate(sources):
+            for right in sources[left_index + 1:]:
+                conflict_source_pairs[f"{left}|{right}"] += 1
+        if len(conflict_samples) < 20:
+            conflict_samples.append({"url": url, "labels": labels, "sources": sources})
 
     # Phase 2.2: Filtering and emitting within shard
     emitted: Set[str] = set()
@@ -132,7 +158,7 @@ def _clean_shard_worker(args: Tuple[str, str, str, List[str], int, int]) -> Dict
                 accepted.writerow(row)
                 counts["cleaned"] += 1
 
-    return counts
+    return {**counts, "conflict_pairs": dict(conflict_pairs), "conflict_source_pairs": dict(conflict_source_pairs), "conflict_samples": conflict_samples}
 
 def run_clean(
     input_file: Optional[str] = None,
@@ -158,6 +184,7 @@ def run_clean(
     if max_samples and max_samples < 50000:
         num_workers = 1
     num_workers = min(num_workers, os.cpu_count() or 1)
+    logger.info(resource_log(num_workers))
 
     print(f"\nBuoc 04: Lam sach du lieu & Loc trung lap ({in_path.name} - {file_size_mb} MB)")
     print(f"Khoi dong xu ly da tien trinh tren {num_workers} workers song song...", flush=True)
@@ -267,6 +294,16 @@ def run_clean(
     for r in results:
         for k in counts:
             counts[k] += r[k]
+    pair_counts = Counter()
+    source_pair_counts = Counter()
+    samples = []
+    for result in results:
+        pair_counts.update(result.get("conflict_pairs", {}))
+        source_pair_counts.update(result.get("conflict_source_pairs", {}))
+        samples.extend(result.get("conflict_samples", []))
+    audit = {"counts": counts, "conflict_label_pairs": dict(pair_counts), "conflict_source_pairs": dict(source_pair_counts), "conflict_samples": samples[:100],
+             "note": "Samples require manual verification against original source records; exact URL strings only."}
+    (out_path.parent / "03_clean_audit.json").write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
 
     t_cat_end = round(time.time() - t_cat0, 2)
     total_elapsed = round(time.time() - t0, 2)

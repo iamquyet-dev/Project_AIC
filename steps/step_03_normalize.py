@@ -23,19 +23,20 @@ if sys.platform == "win32":
         pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_PROCESSED_DIR = BASE_DIR / "data" / "processed"
+DATA_PROCESSED_DIR = Path(os.environ["AIC_RUN_DIR"]).resolve() / "processed" if os.environ.get("AIC_RUN_DIR") else BASE_DIR / "data" / "processed"
 
 CPU_COUNT = os.cpu_count() or 4
-DEFAULT_WORKERS = min(16, max(1, CPU_COUNT - 2))
+try:
+    from . import safe_default_workers, resource_log
+except ImportError:
+    from __init__ import safe_default_workers, resource_log
+DEFAULT_WORKERS = safe_default_workers()
 
 LABEL_MAPPING = {
-    "0": "benign",
     "safe": "benign",
     "good": "benign",
     "ham": "benign",
     "legitimate": "benign",
-    "1": "phishing",
-    "bad": "phishing",
     "phish": "phishing",
     "virus": "malware",
     "trojan": "malware",
@@ -87,10 +88,16 @@ def _normalize_slice(args: Tuple[str, int, int, str, str]) -> int:
             channel = fields[5] if len(fields) > 5 else "agent"
             origin = fields[6] if len(fields) > 6 else "raw"
             source_split = fields[7] if len(fields) > 7 else ""
+            observed = fields[8] if len(fields) > 8 else ""
+            retrieved = fields[9] if len(fields) > 9 else ""
+            verification = fields[10] if len(fields) > 10 else "unverified"
             normalized_url = (url or url_raw).strip()
             normalized_label = label.strip().lower()
             normalized_label = LABEL_MAPPING.get(normalized_label, normalized_label)
-            writer.writerow([row_start, normalized_url, normalized_label, ts_now, channel, origin, ipv4, source_split])
+            output = [row_start, normalized_url, normalized_label, ts_now, channel, origin, ipv4, source_split]
+            if len(fields) > 8:
+                output.extend([url_raw, label_raw, observed, retrieved, verification])
+            writer.writerow(output)
             count += 1
     return count
 
@@ -115,9 +122,10 @@ def run_normalize(
 
     file_size = in_path.stat().st_size
     num_workers = workers or DEFAULT_WORKERS
+    logger.info(resource_log(num_workers))
     t0 = time.time()
     ts_now = datetime.now(timezone.utc).isoformat()
-    header = ["_aic211_source_row", "url", "label", "timestamp_utc", "channel", "source", "_aic211_ipv4", "source_split"]
+    header = ["_aic211_source_row", "url", "label", "timestamp_utc", "channel", "source", "_aic211_ipv4", "source_split", "url_raw", "label_raw", "source_observed_utc", "retrieved_utc", "verification_status"]
 
     print(f"Chuan hoa: {in_path.name} ({round(file_size / (1024*1024), 2)} MB) - {num_workers} tien trinh", flush=True)
 
@@ -132,7 +140,7 @@ def run_normalize(
                 u = (row.get("url") or row.get("url_raw") or "").strip()
                 lbl = row.get("label") or row.get("label_raw") or ""
                 lbl_norm = LABEL_MAPPING.get(lbl.lower().strip(), lbl.lower().strip())
-                writer.writerow([count, u, lbl_norm, ts_now, row.get("channel", "agent"), row.get("source", "raw"), row.get("_aic211_ipv4", ""), row.get("source_split", "")])
+                writer.writerow([count, u, lbl_norm, ts_now, row.get("channel", "agent"), row.get("source", "raw"), row.get("_aic211_ipv4", ""), row.get("source_split", ""), row.get("url_raw", u), row.get("label_raw", lbl), row.get("source_observed_utc", ""), row.get("retrieved_utc", ""), row.get("verification_status", "unverified")])
                 if count >= max_samples:
                     break
         elapsed = round(time.time() - t0, 2)

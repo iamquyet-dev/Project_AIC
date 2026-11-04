@@ -21,9 +21,36 @@ from steps import step_07_train as train
 from steps import step_08_evaluate as evaluate
 from url_detector.model_runtime import ModelRuntime
 from url_detector.thresholded import ThresholdManager
+from web import core as web_core
 
 
 class PipelineRegressions(unittest.TestCase):
+    def test_source_label_does_not_guess_from_folder(self):
+        self.assertEqual(parsing._map_label("1", "kaggle_phishing_site_urls"), "unknown")
+        self.assertEqual(parsing._map_label("bad", "phishstorm"), "unknown")
+        self.assertEqual(parsing._map_label("defacement", "sample"), "malicious")
+        self.assertEqual(parsing._map_label("benign", "tranco_domain_ranking"), "unknown")
+
+    def test_public_suffix_grouping_and_ip_isolation(self):
+        self.assertEqual(dataset.canonical_group_key("https://a.example.co.uk/x"), dataset.canonical_group_key("https://b.example.co.uk/y"))
+        self.assertNotEqual(dataset.canonical_group_key("https://a.blogspot.com/x"), dataset.canonical_group_key("https://b.blogspot.com/y"))
+        self.assertEqual(dataset.canonical_group_key("http://1.2.3.4/i"), dataset.canonical_group_key("http://1.2.3.4/bin.sh"))
+        self.assertNotEqual(dataset.canonical_group_key("http://1.2.3.4/i"), dataset.canonical_group_key("http://1.2.3.5/i"))
+
+    def test_web_risk_flag_uses_total_threat_score(self):
+        class Pipeline:
+            def predict_proba(self, urls):
+                return [[0.40, 0.25, 0.20, 0.15] for _ in urls]
+
+        model = {"pipeline": Pipeline(), "classes": ["benign", "malicious", "phishing", "malware"],
+                 "name": "fixture", "key": "fixture", "sha256": "fixturehash"}
+        with patch.object(web_core.REGISTRY, "get_model", return_value=model):
+            result = web_core.predict_urls(["https://example.test/a,b"])[0]
+        self.assertEqual(result["predicted_class"], "benign")
+        self.assertTrue(result["risk_flag"])
+        self.assertEqual(result["risk_level"], "suspicious")
+        self.assertFalse(result["score_calibrated"])
+        self.assertEqual(result["model_sha256"], "fixturehash")
     @unittest.skipUnless(importlib.util.find_spec("openpyxl"), "openpyxl is not installed in this interpreter")
     def test_excel_parsing_preserves_comma_url(self):
         import openpyxl
@@ -147,6 +174,26 @@ class PipelineRegressions(unittest.TestCase):
             self.assertEqual(train_rows[0]["label"], "malicious")
             self.assertEqual(train_rows[0]["label_id"], str(dataset.LABEL_IDS["malicious"]))
             self.assertEqual(meta["skipped_rows"]["unknown_label"], 1)
+
+    def test_source_holdout_purges_shared_domain_from_train(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            source = root / "features.csv"
+            with source.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(["url", "label", "source"])
+                writer.writerows([
+                    ["https://a.example.co.uk/", "benign", "train_feed"],
+                    ["https://b.example.co.uk/", "phishing", "held_feed"],
+                    ["https://different.net/", "malware", "train_feed"],
+                ])
+            with patch.object(dataset, "DATA_PROCESSED_DIR", root):
+                meta = dataset.run_dataset_split(str(source), holdout_sources=["held_feed"])
+            with (root / "test.csv").open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual({row["url"] for row in rows} & {"https://a.example.co.uk/", "https://b.example.co.uk/"},
+                             {"https://a.example.co.uk/", "https://b.example.co.uk/"})
+            self.assertEqual(meta["source_holdout"], ["held_feed"])
 
     def test_evaluation_interval_and_no_test_fallback(self):
         low, high = evaluate.wilson_interval(50, 100)

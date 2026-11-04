@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+import hashlib
+import json
+import traceback
 import logging
 import os
 from pathlib import Path
@@ -159,8 +163,114 @@ def interactive_menu():
         else:
             print("Lua chon khong hop le.")
 
+def _run_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def run_isolated(argv=None) -> None:
+    parser = argparse.ArgumentParser(description="Run into a new isolated folder under runs/")
+    parser.add_argument("--run-dir", type=Path, default=PROJECT_ROOT / "runs" / datetime.now(timezone.utc).strftime("run_%Y%m%d_%H%M%S"))
+    parser.add_argument("--samples", type=int, default=5000, help="Bounded smoke run (default: 5000 rows across sources)")
+    parser.add_argument("--all-rows", action="store_true", help="Run all rows only after source labels and holdout policy are verified")
+    parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--through-step", type=int, choices=range(2, 9), default=8)
+    parser.add_argument("--holdout-source", action="append", default=[], help="Source held out from train and validation")
+    args = parser.parse_args(argv)
+    if args.all_rows:
+        args.samples = None
+    run_dir = args.run_dir.resolve()
+    allowed = (PROJECT_ROOT / "runs").resolve()
+    if run_dir.parent != allowed or run_dir.exists():
+        parser.error("--run-dir must be a new direct child of this project/runs")
+    if args.samples is not None and args.samples <= 0:
+        parser.error("--samples must be positive")
+    if args.workers is not None and args.workers <= 0:
+        parser.error("--workers must be positive")
+    run_dir.mkdir(parents=True)
+    os.environ["AIC_RUN_DIR"] = str(run_dir)
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from steps.step_02_parsing import run_parsing
+    from steps.step_03_normalize import run_normalize
+    from steps.step_04_clean import run_clean
+    from steps.step_05_features import run_features
+    from steps.step_06_dataset import run_dataset_split
+    from steps.step_06_dataset import audit_split
+    from steps.step_07_train import run_train
+    from steps.step_08_evaluate import run_evaluate
+    from steps.step_08_evaluate import audit_web_decision
+    from steps import resource_log, safe_default_workers
+
+    workers = args.workers or safe_default_workers()
+    manifest_path = run_dir / "run_manifest.json"
+    manifest = {"run_dir": str(run_dir), "started_utc": datetime.now(timezone.utc).isoformat(),
+                "python": sys.executable, "resource_log": resource_log(workers), "samples_per_source": args.samples,
+                "holdout_sources": args.holdout_source,
+                "stages": {}, "code_sha256": {str(path.relative_to(PROJECT_ROOT)): _run_sha256(path)
+                for folder in ("steps", "url_detector", "web") for path in sorted((PROJECT_ROOT / folder).glob("*.py"))}}
+    manifest["raw_source_metadata"] = [
+        {"metadata_file": str(path.relative_to(PROJECT_ROOT)), "metadata_sha256": _run_sha256(path),
+         "declared_raw_sha256": item.get("sha256"), "retrieved_utc": item.get("retrieved_utc"),
+         "source": item.get("source"), "hash_verified_in_this_run": False}
+        for path in sorted((PROJECT_ROOT / "data" / "raw").rglob("*.source.json"))
+        for item in [json.loads(path.read_text(encoding="utf-8"))]
+    ]
+    def evaluate_and_audit():
+        run_evaluate(samples=args.samples)
+        result = audit_web_decision(run_dir / "processed" / "val.csv")
+        path = run_dir / "metrics" / "web_decision_validation.json"
+        path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def split_and_audit():
+        run_dataset_split(max_samples=args.samples, holdout_sources=args.holdout_source)
+        audit_split(run_dir / "processed", run_dir / "metrics" / "split_audit.json")
+
+    actions = {
+        2: lambda: run_parsing(workers=workers, max_samples=args.samples),
+        3: lambda: run_normalize(workers=workers, max_samples=args.samples),
+        4: lambda: run_clean(workers=workers, max_samples=args.samples),
+        5: lambda: run_features(workers=workers, max_samples=args.samples),
+        6: split_and_audit,
+        7: lambda: run_train(samples=args.samples),
+        8: evaluate_and_audit,
+    }
+    outputs = {
+        2: [run_dir / "processed" / "01_parsed.csv"],
+        3: [run_dir / "processed" / "02_normalized.csv"],
+        4: [run_dir / "processed" / "03_cleaned.csv", run_dir / "processed" / "03_rejected.csv"],
+        5: [run_dir / "processed" / "04_features.csv"],
+        6: [*(run_dir / "processed" / x for x in ("train.csv", "val.csv", "test.csv", "dataset_version.json")), run_dir / "metrics" / "split_audit.json"],
+        7: list((run_dir / "models" / x) for x in ("model_word_char_svm.joblib", "model_word_tfidf_logistic.joblib", "model_lexical_logistic.joblib")),
+        8: [run_dir / "metrics" / "multiclass_summary.json", run_dir / "metrics" / "web_decision_validation.json"],
+    }
+    try:
+        for step in range(2, args.through_step + 1):
+            print(f"\n=== Stage {step} in {run_dir} ===", flush=True)
+            actions[step]()
+            manifest["stages"][str(step)] = {"finished_utc": datetime.now(timezone.utc).isoformat(),
+                "outputs": {str(path.relative_to(run_dir)): {"bytes": path.stat().st_size, "sha256": _run_sha256(path)}
+                            for path in outputs[step] if path.is_file()}}
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        manifest["status"] = "completed"
+    except Exception as exc:
+        manifest["status"] = "failed"
+        manifest["error"] = str(exc)
+        traceback.print_exc()
+        raise
+    finally:
+        manifest["finished_utc"] = datetime.now(timezone.utc).isoformat()
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+
+
 if __name__ == "__main__":
-    if len(sys.argv) == 1:
+    if len(sys.argv) > 1 and sys.argv[1] == "--isolated":
+        run_isolated(sys.argv[2:])
+    elif len(sys.argv) == 1:
         interactive_menu()
     else:
         parser = argparse.ArgumentParser(description="Chay quy trinh AIC211")

@@ -104,13 +104,18 @@ async function fetchMetrics() {
     const report = await response.json();
     if (!Array.isArray(report.models) || !report.models.length) throw new Error('Chưa có báo cáo đánh giá.');
     const rows = Number(report.total_rows || 0).toLocaleString('vi-VN');
-    const verified = report.provenance_verified === true;
-    note.textContent = `${report.dataset || 'Tập chưa rõ'} · ${rows} URL · ${report.timestamp || 'không rõ ngày'}. ${verified ? 'Đã đối chiếu phiên bản mô hình và dữ liệu.' : 'Chưa xác minh khớp phiên bản mô hình/dữ liệu; không dùng để kết luận học vẹt.'}`;
+    const verified = report.web_report_match?.verified === true;
+    note.textContent = `${report.dataset || 'Tập chưa rõ'} · ${rows} URL · ${report.timestamp || 'không rõ ngày'} · test nội bộ. ${verified ? 'Hash ba model web khớp báo cáo và dữ liệu; chưa kiểm định độc lập theo nguồn/thời gian.' : 'Chưa xác minh model web khớp báo cáo; các chỉ số tạm ẩn.'}`;
     body.innerHTML = '';
     const featureNames = {
       svm: 'Word + char n-grams (3-5 ký tự)',
       logistic_tfidf: 'Word TF-IDF',
       logistic_lexical: '11 đặc trưng cấu trúc (Lexical)',
+    };
+    const estimatorNames = {
+      svm: 'SGDClassifier modified_huber (word + char)',
+      logistic_tfidf: 'SGDClassifier log_loss (TF-IDF)',
+      logistic_lexical: 'SGDClassifier log_loss (lexical)',
     };
     const modelIds = {
       svm: 'model_word_char_svm',
@@ -122,13 +127,13 @@ async function fetchMetrics() {
       const row = document.createElement('tr');
       const modelInfo = state.models.find((item) => item.id === modelIds[model.model_key]);
       for (const value of [
-        model.name || model.model_key,
+        estimatorNames[model.model_key] || model.name || model.model_key,
         featureNames[model.model_key] || 'Không rõ',
-        percent(model.accuracy),
-        percent(model.precision_weighted),
-        percent(model.recall_weighted),
-        percent(model.weighted_f1),
-        percent(model.macro_f1),
+        verified ? percent(model.accuracy) : 'Chưa xác minh',
+        verified ? percent(model.precision_weighted) : '—',
+        verified ? percent(model.recall_weighted) : '—',
+        verified ? percent(model.weighted_f1) : '—',
+        verified ? percent(model.macro_f1) : '—',
         modelInfo?.file_size_human || '—',
       ]) {
         const cell = document.createElement('td');
@@ -268,16 +273,18 @@ document.getElementById('btn-scan').addEventListener('click', async () => {
 });
 
 function exportResultsToCsv(results, modelName) {
-  const headers = ['URL', 'Phán đoán', 'Mức rủi ro', 'Điểm rủi ro (%)', 'Benign (%)', 'Malicious (%)', 'Phishing (%)', 'Malware (%)', 'Hostname', 'Độ dài', 'Entropy', 'Từ khóa cảnh báo', 'Mô hình'];
+  const headers = ['URL đầu vào', 'Nhãn bốn lớp', 'Cờ nguy cơ', 'Mức cảnh báo', 'Điểm mô hình nguy cơ (%)', 'Điểm đã hiệu chuẩn', 'Benign (điểm thô %)', 'Malicious (điểm thô %)', 'Phishing (điểm thô %)', 'Malware (điểm thô %)', 'Hostname', 'Độ dài', 'Entropy', 'Từ khóa cảnh báo', 'Model ID', 'Model SHA-256', 'Thời gian quét UTC'];
   const rows = [headers.join(',')];
   results.forEach((r) => {
     const esc = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
     const probs = r.probabilities || {};
     rows.push([
       esc(r.url),
-      esc(r.verdict),
+      esc(r.predicted_class),
+      esc(r.risk_flag ? 'risk' : 'low_risk'),
       esc(r.risk_level),
       r.risk_percent ?? '',
+      r.score_calibrated ? r.risk_percent ?? '' : '',
       probs.benign !== undefined ? (probs.benign * 100).toFixed(1) : '',
       probs.malicious !== undefined ? (probs.malicious * 100).toFixed(1) : '',
       probs.phishing !== undefined ? (probs.phishing * 100).toFixed(1) : '',
@@ -286,7 +293,9 @@ function exportResultsToCsv(results, modelName) {
       r.details?.length ?? '',
       r.details?.entropy ?? '',
       esc((r.details?.suspicious_found || []).join('; ')),
-      esc(modelName || r.model_name || '')
+      esc(r.model_id || modelName || ''),
+      esc(r.model_sha256 || ''),
+      esc(r.scanned_at_utc || '')
     ].join(','));
   });
   const blob = new Blob(["\uFEFF" + rows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
