@@ -179,7 +179,7 @@ def save_summary_reports(results: List[Dict[str, Any]], test_file_name: str, tot
         "# Bang So Sanh Hieu Nang Cac Mo Hinh AIC211",
         "",
         "| Mo hinh | Accuracy (CI 95%) | Phat hien de doa | Bao nham benign | Precision (Weighted) | Recall (Weighted) | Weighted-F1 | Do tre (ms/URL) |",
-        "|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|--|",
     ]
     for r in results:
         m_key = r.get("model", "")
