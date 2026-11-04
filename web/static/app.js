@@ -267,16 +267,88 @@ document.getElementById('btn-scan').addEventListener('click', async () => {
   }
 });
 
+function exportResultsToCsv(results, modelName) {
+  const headers = ['URL', 'Phán đoán', 'Mức rủi ro', 'Điểm rủi ro (%)', 'Benign (%)', 'Malicious (%)', 'Phishing (%)', 'Malware (%)', 'Hostname', 'Độ dài', 'Entropy', 'Từ khóa cảnh báo', 'Mô hình'];
+  const rows = [headers.join(',')];
+  results.forEach((r) => {
+    const esc = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
+    const probs = r.probabilities || {};
+    rows.push([
+      esc(r.url),
+      esc(r.verdict),
+      esc(r.risk_level),
+      r.risk_percent ?? '',
+      probs.benign !== undefined ? (probs.benign * 100).toFixed(1) : '',
+      probs.malicious !== undefined ? (probs.malicious * 100).toFixed(1) : '',
+      probs.phishing !== undefined ? (probs.phishing * 100).toFixed(1) : '',
+      probs.malware !== undefined ? (probs.malware * 100).toFixed(1) : '',
+      esc(r.details?.host || ''),
+      r.details?.length ?? '',
+      r.details?.entropy ?? '',
+      esc((r.details?.suspicious_found || []).join('; ')),
+      esc(modelName || r.model_name || '')
+    ].join(','));
+  });
+  const blob = new Blob(["\uFEFF" + rows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `AIC211_KetQua_${results.length}_URL.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function renderResults(data) {
   const container = document.getElementById('scan-results-container');
+  const total = data.results.length;
+
+  let safeCount = 0, suspCount = 0, dangCount = 0;
+  data.results.forEach((r) => {
+    if (r.risk_level === 'safe') safeCount++;
+    else if (r.risk_level === 'suspicious') suspCount++;
+    else dangCount++;
+  });
+
   container.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
-      <h3>Kết quả phân tích (${Number(data.total_scanned)} URL · ${Number(data.elapsed_ms)} ms)</h3>
-      <span class="mono muted">Mô hình: ${escapeHtml(data.model_used)}</span>
+    <div style="background:rgba(30,41,59,0.7); border:1px solid #334155; padding:14px; border-radius:8px; margin-bottom:16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+        <div>
+          <h3 style="margin:0 0 4px 0;">Kết quả phân tích (${total.toLocaleString()} URL · ${Number(data.elapsed_ms)} ms)</h3>
+          <span class="mono muted" style="font-size:12px;">Mô hình: ${escapeHtml(data.model_used)}</span>
+        </div>
+        <button id="btn-export-csv" style="background:#0284c7; color:#fff; border:none; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:600; display:inline-flex; align-items:center; gap:6px;">
+          📥 Tải toàn bộ kết quả (CSV)
+        </button>
+      </div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:140px; background:rgba(16,185,129,0.15); border:1px solid #10b981; padding:8px 12px; border-radius:6px;">
+          <div style="color:#10b981; font-size:11px; font-weight:600;">AN TOÀN</div>
+          <div style="font-size:20px; font-weight:bold; color:#10b981;">${safeCount.toLocaleString()}</div>
+        </div>
+        <div style="flex:1; min-width:140px; background:rgba(245,158,11,0.15); border:1px solid #f59e0b; padding:8px 12px; border-radius:6px;">
+          <div style="color:#f59e0b; font-size:11px; font-weight:600;">NGHI VẤN</div>
+          <div style="font-size:20px; font-weight:bold; color:#f59e0b;">${suspCount.toLocaleString()}</div>
+        </div>
+        <div style="flex:1; min-width:140px; background:rgba(239,68,68,0.15); border:1px solid #ef4444; padding:8px 12px; border-radius:6px;">
+          <div style="color:#ef4444; font-size:11px; font-weight:600;">ĐỘC HẠI</div>
+          <div style="font-size:20px; font-weight:bold; color:#ef4444;">${dangCount.toLocaleString()}</div>
+        </div>
+      </div>
     </div>
+    <div id="cards-wrapper"></div>
   `;
 
-  data.results.forEach((item) => {
+  document.getElementById('btn-export-csv').addEventListener('click', () => {
+    exportResultsToCsv(data.results, data.model_used);
+  });
+
+  const cardsWrapper = document.getElementById('cards-wrapper');
+  const renderLimit = 50;
+  const initialItems = total > renderLimit ? data.results.slice(0, renderLimit) : data.results;
+
+  function createResultCard(item) {
     const card = document.createElement('div');
     card.className = `result-card ${item.risk_level}`;
 
@@ -325,8 +397,30 @@ function renderResults(data) {
         ${suspiciousTag}
       </div>
     `;
-    container.appendChild(card);
-  });
+    return card;
+  }
+
+  initialItems.forEach((item) => cardsWrapper.appendChild(createResultCard(item)));
+
+  if (total > renderLimit) {
+    const notice = document.createElement('div');
+    notice.id = 'render-more-notice';
+    notice.style.cssText = 'background:rgba(59,130,246,0.15); border:1px solid #3b82f6; padding:12px 16px; border-radius:8px; margin-top:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;';
+    notice.innerHTML = `
+      <span style="color:#93c5fd; font-size:13px;">
+        Đang hiển thị <strong>${renderLimit}</strong> / <strong>${total.toLocaleString()}</strong> thẻ kết quả để giữ trình duyệt mượt mà. Vui lòng bấm <strong>Tải toàn bộ kết quả (CSV)</strong> để xem chi tiết trên Excel.
+      </span>
+      <button id="btn-show-all-cards" style="background:#334155; color:#f1f5f9; border:none; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">
+        Hiển thị tất cả lên web
+      </button>
+    `;
+    container.appendChild(notice);
+
+    document.getElementById('btn-show-all-cards').addEventListener('click', () => {
+      data.results.slice(renderLimit).forEach((item) => cardsWrapper.appendChild(createResultCard(item)));
+      notice.remove();
+    });
+  }
 }
 
 // 5. Nhap Model qua Duong dan

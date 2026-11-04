@@ -210,8 +210,8 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 if model_key not in REGISTRY.available_models:
                     self.send_json(400, {"error": f"Không tìm thấy mô hình: {model_key}"})
                     return
-                if not isinstance(urls, list) or not 1 <= len(urls) <= 50 or any(not isinstance(u, str) or len(u) > 4096 for u in urls):
-                    self.send_json(400, {"error": "Cần 1 đến 50 URL hợp lệ, mỗi URL tối đa 4096 ký tự."})
+                if not isinstance(urls, list) or not 1 <= len(urls) <= 10000 or any(not isinstance(u, str) or len(u) > 4096 for u in urls):
+                    self.send_json(400, {"error": "Cần 1 đến 10,000 URL hợp lệ, mỗi URL tối đa 4096 ký tự."})
                     return
 
                 t0 = time.time()
