@@ -1,8 +1,8 @@
 {
-  "timestamp": "2026-11-03T11:31:58+07:00",
+  "timestamp": "2026-11-03T20:22:49.014771+00:00",
   "task": "multi_class_classification",
   "dataset": "test.csv",
-  "total_rows": 6484817,
+  "total_rows": 5913123,
   "classes": [
     "benign",
     "malicious",
@@ -10,208 +10,310 @@
     "malware"
   ],
   "class_distribution": {
-    "benign": 3423772,
-    "phishing": 2115471,
-    "malicious": 517099,
-    "malware": 428475
+    "benign": 3478583,
+    "phishing": 1981192,
+    "malware": 204606,
+    "malicious": 248742
+  },
+  "provenance_verified": true,
+  "provenance": {
+    "verified": true,
+    "split_version": "v_20261103_134343",
+    "dataset_sha256": "51e9d27d91118f7a020ac3f966d684f2836e071e9b68cb9c7f6127c0b60be807",
+    "dataset_matches_manifest": true,
+    "models_match_manifest": true,
+    "scope": "Hash/file lineage only; does not establish independence of domains, sources or time."
   },
   "models": [
     {
       "name": "1. Linear SVM (Word + Char n-grams)",
       "model_key": "svm",
-      "accuracy": 0.8045,
-      "precision_weighted": 0.8082,
-      "recall_weighted": 0.8045,
-      "weighted_f1": 0.8044,
-      "macro_precision": 0.6934,
-      "macro_recall": 0.7057,
-      "macro_f1": 0.6963,
-      "latency_ms": 0.1414,
+      "accuracy": 0.8748,
+      "precision_weighted": 0.8773,
+      "recall_weighted": 0.8748,
+      "weighted_f1": 0.8751,
+      "macro_precision": 0.7956,
+      "macro_recall": 0.8378,
+      "macro_f1": 0.8137,
+      "latency_ms": 0.1512,
       "per_class": {
         "benign": {
-          "precision": 0.8553,
-          "recall": 0.8981,
-          "f1": 0.8762,
-          "support": 3423772
+          "precision": 0.896,
+          "recall": 0.9191,
+          "f1": 0.9074,
+          "support": 3478583
         },
         "malicious": {
-          "precision": 0.5216,
-          "recall": 0.4832,
-          "f1": 0.5016,
-          "support": 517099
+          "precision": 0.7855,
+          "recall": 0.8408,
+          "f1": 0.8122,
+          "support": 248742
         },
         "phishing": {
-          "precision": 0.8561,
-          "recall": 0.7556,
-          "f1": 0.8027,
-          "support": 2115471
+          "precision": 0.8826,
+          "recall": 0.8109,
+          "f1": 0.8453,
+          "support": 1981192
         },
         "malware": {
-          "precision": 0.5407,
-          "recall": 0.686,
-          "f1": 0.6048,
-          "support": 428475
+          "precision": 0.6184,
+          "recall": 0.7804,
+          "f1": 0.69,
+          "support": 204606
         }
       },
       "confusion_matrix": [
         [
-          3074863,
-          73365,
-          210797,
-          64747
+          3197281,
+          30604,
+          199852,
+          50846
         ],
         [
-          95243,
-          249847,
-          32917,
-          139092
+          36794,
+          209130,
+          1736,
+          1082
         ],
         [
-          377190,
-          94054,
-          1598386,
-          45841
+          303377,
+          24618,
+          1606579,
+          46618
         ],
         [
-          47779,
-          61757,
-          24999,
-          293940
+          30991,
+          1885,
+          12048,
+          159682
         ]
+      ],
+      "model_sha256": "19c173faf28be8d9ab60b11751ff9b138478dfe5232a2e3bab332e866e0bfe74",
+      "training_info": {
+        "train_path": "E:\\Project_AIC\\data\\processed\\train.csv",
+        "train_sha256": "6580604099a753bb6b507be910cb257a5c2c10a630533c56d55f4d19bd2c7ada",
+        "train_bytes": 3789090361,
+        "rows_loaded": 27518983,
+        "samples_requested": null,
+        "split_version": "v_20261103_134343",
+        "split_manifest_sha256": "9546f4c827a5c0b7dd560d8c6f2ad0dd2ac871617f378b9ea10e0bbd6f210de1",
+        "split_verified": true,
+        "training_code_sha256": "a5a68082c57e82bbcb21f3aefc4641b67ad1a3b3e4e47d7efe8c71bec8ccea8f",
+        "extractor_code_sha256": "f48c7b9f7428bc34bd13ac46dc34b386d2c101c1517c24c7025257c5acbd4fef",
+        "model_key": "svm",
+        "incremental": false,
+        "previous_training": null,
+        "lineage_complete": true
+      },
+      "accuracy_ci95": [
+        0.8745113449697017,
+        0.8750448744105901
+      ],
+      "threat_detection_rate": 0.8475432730618515,
+      "false_benign_alarm_rate": 0.08086683572017686,
+      "threat_detection_ci95": [
+        0.8470911871497017,
+        0.8479942621991977
+      ],
+      "false_benign_alarm_ci95": [
+        0.08058080052184086,
+        0.08115379662936292
       ]
     },
     {
       "name": "2. Logistic Regression (TF-IDF)",
       "model_key": "logistic_tfidf",
-      "accuracy": 0.739,
-      "precision_weighted": 0.7422,
-      "recall_weighted": 0.739,
-      "weighted_f1": 0.7315,
-      "macro_precision": 0.6041,
-      "macro_recall": 0.6087,
-      "macro_f1": 0.5962,
-      "latency_ms": 0.024,
+      "accuracy": 0.7875,
+      "precision_weighted": 0.809,
+      "recall_weighted": 0.7875,
+      "weighted_f1": 0.7875,
+      "macro_precision": 0.625,
+      "macro_recall": 0.6827,
+      "macro_f1": 0.6369,
+      "latency_ms": 0.0237,
       "per_class": {
         "benign": {
-          "precision": 0.79,
-          "recall": 0.9074,
-          "f1": 0.8447,
-          "support": 3423772
+          "precision": 0.8356,
+          "recall": 0.9217,
+          "f1": 0.8766,
+          "support": 3478583
         },
         "malicious": {
-          "precision": 0.3277,
-          "recall": 0.2606,
-          "f1": 0.2903,
-          "support": 517099
+          "precision": 0.2983,
+          "recall": 0.4907,
+          "f1": 0.371,
+          "support": 248742
         },
         "phishing": {
-          "precision": 0.8193,
-          "recall": 0.5976,
-          "f1": 0.6911,
-          "support": 2115471
+          "precision": 0.8575,
+          "recall": 0.5957,
+          "f1": 0.703,
+          "support": 1981192
         },
         "malware": {
-          "precision": 0.4794,
-          "recall": 0.6692,
-          "f1": 0.5586,
-          "support": 428475
+          "precision": 0.5088,
+          "recall": 0.7226,
+          "f1": 0.5971,
+          "support": 204606
         }
       },
       "confusion_matrix": [
         [
-          3106793,
-          68390,
-          163862,
-          84727
+          3206279,
+          71986,
+          135942,
+          64376
         ],
         [
-          144834,
-          134765,
-          92245,
-          145255
+          73481,
+          122048,
+          46772,
+          6441
         ],
         [
-          603048,
-          166882,
-          1264144,
-          81397
+          518357,
+          210742,
+          1180154,
+          71939
         ],
         [
-          77844,
-          41260,
-          22618,
-          286753
+          38902,
+          4402,
+          13446,
+          147856
         ]
+      ],
+      "model_sha256": "6073fcb2c3d90a102c3f56350013059297de9b80493e4689833869b1cc21e14e",
+      "training_info": {
+        "train_path": "E:\\Project_AIC\\data\\processed\\train.csv",
+        "train_sha256": "6580604099a753bb6b507be910cb257a5c2c10a630533c56d55f4d19bd2c7ada",
+        "train_bytes": 3789090361,
+        "rows_loaded": 27518983,
+        "samples_requested": null,
+        "split_version": "v_20261103_134343",
+        "split_manifest_sha256": "9546f4c827a5c0b7dd560d8c6f2ad0dd2ac871617f378b9ea10e0bbd6f210de1",
+        "split_verified": true,
+        "training_code_sha256": "a5a68082c57e82bbcb21f3aefc4641b67ad1a3b3e4e47d7efe8c71bec8ccea8f",
+        "extractor_code_sha256": "f48c7b9f7428bc34bd13ac46dc34b386d2c101c1517c24c7025257c5acbd4fef",
+        "model_key": "logistic_tfidf",
+        "incremental": false,
+        "previous_training": null,
+        "lineage_complete": true
+      },
+      "accuracy_ci95": [
+        0.7871282375011293,
+        0.7877877234021042
+      ],
+      "threat_detection_rate": 0.7409202559826497,
+      "false_benign_alarm_rate": 0.07828015027958224,
+      "threat_detection_ci95": [
+        0.7403695221760749,
+        0.7414702294946456
+      ],
+      "false_benign_alarm_ci95": [
+        0.07799834090270212,
+        0.07856289108034821
       ]
     },
     {
       "name": "3. Logistic Regression (Lexical)",
       "model_key": "logistic_lexical",
-      "accuracy": 0.5908,
-      "precision_weighted": 0.5999,
-      "recall_weighted": 0.5908,
-      "weighted_f1": 0.5941,
-      "macro_precision": 0.4353,
-      "macro_recall": 0.4393,
-      "macro_f1": 0.4356,
-      "latency_ms": 0.0629,
+      "accuracy": 0.6715,
+      "precision_weighted": 0.6826,
+      "recall_weighted": 0.6715,
+      "weighted_f1": 0.6754,
+      "macro_precision": 0.464,
+      "macro_recall": 0.4837,
+      "macro_f1": 0.47,
+      "latency_ms": 0.0613,
       "per_class": {
         "benign": {
-          "precision": 0.7012,
-          "recall": 0.724,
-          "f1": 0.7124,
-          "support": 3423772
+          "precision": 0.7623,
+          "recall": 0.7842,
+          "f1": 0.7731,
+          "support": 3478583
         },
         "malicious": {
-          "precision": 0.2569,
-          "recall": 0.2757,
-          "f1": 0.2659,
-          "support": 517099
+          "precision": 0.3082,
+          "recall": 0.3723,
+          "f1": 0.3372,
+          "support": 248742
         },
         "phishing": {
-          "precision": 0.6052,
-          "recall": 0.5249,
-          "f1": 0.5622,
-          "support": 2115471
+          "precision": 0.6456,
+          "recall": 0.5578,
+          "f1": 0.5985,
+          "support": 1981192
         },
         "malware": {
-          "precision": 0.178,
-          "recall": 0.2327,
-          "f1": 0.2017,
-          "support": 428475
+          "precision": 0.1401,
+          "recall": 0.2207,
+          "f1": 0.1714,
+          "support": 204606
         }
       },
       "confusion_matrix": [
         [
-          2478657,
-          182023,
-          583419,
-          179673
+          2727875,
+          88960,
+          562774,
+          98974
         ],
         [
-          254852,
-          142553,
-          56432,
-          63262
+          141773,
+          92603,
+          3699,
+          10667
         ],
         [
-          624263,
-          163231,
-          1110504,
-          217473
+          604480,
+          104032,
+          1105077,
+          167603
         ],
         [
-          177151,
-          67163,
-          84475,
-          99686
+          104412,
+          14874,
+          40157,
+          45163
         ]
+      ],
+      "model_sha256": "8b38a0f4d2c27c4378f171228cd6f9d0fd1b43e3115f2eaa5c90602f61c81b4d",
+      "training_info": {
+        "train_path": "E:\\Project_AIC\\data\\processed\\train.csv",
+        "train_sha256": "6580604099a753bb6b507be910cb257a5c2c10a630533c56d55f4d19bd2c7ada",
+        "train_bytes": 3789090361,
+        "rows_loaded": 27518983,
+        "samples_requested": null,
+        "split_version": "v_20261103_134343",
+        "split_manifest_sha256": "9546f4c827a5c0b7dd560d8c6f2ad0dd2ac871617f378b9ea10e0bbd6f210de1",
+        "split_verified": true,
+        "training_code_sha256": "a5a68082c57e82bbcb21f3aefc4641b67ad1a3b3e4e47d7efe8c71bec8ccea8f",
+        "extractor_code_sha256": "f48c7b9f7428bc34bd13ac46dc34b386d2c101c1517c24c7025257c5acbd4fef",
+        "model_key": "logistic_lexical",
+        "incremental": false,
+        "previous_training": null,
+        "lineage_complete": true
+      },
+      "accuracy_ci95": [
+        0.6711307897768851,
+        0.671887896340052
+      ],
+      "threat_detection_rate": 0.6505849154255013,
+      "false_benign_alarm_rate": 0.2158085634294194,
+      "threat_detection_ci95": [
+        0.6499857670175873,
+        0.6511835886185176
+      ],
+      "false_benign_alarm_ci95": [
+        0.21537657036866878,
+        0.2162411841644243
       ]
     }
   ],
   "plots": {
-    "cm_word_char_svm": "outputs/figures/cm_word_char_svm.png",
-    "cm_word_tfidf_logistic": "outputs/figures/cm_word_tfidf_logistic.png",
-    "cm_lexical_logistic": "outputs/figures/cm_lexical_logistic.png"
+    "svm": "outputs/figures/cm_svm.png",
+    "logistic_tfidf": "outputs/figures/cm_logistic_tfidf.png",
+    "logistic_lexical": "outputs/figures/cm_logistic_lexical.png"
   }
 }
